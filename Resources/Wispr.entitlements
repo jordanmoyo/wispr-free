@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required under the hardened runtime: without it, macOS denies the
+	     microphone silently (no prompt, no TCC entry) and recordings are
+	     all zeros — Whisper then hallucinates "you". -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

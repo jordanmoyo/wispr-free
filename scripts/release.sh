@@ -37,9 +37,12 @@ swift test
 APP="dist/Wispr Free.app"
 
 # Hardened runtime + secure timestamp are required for notarization.
+# The app itself also needs the audio-input entitlement: under the hardened
+# runtime, macOS denies the microphone without it (silently — no prompt).
 codesign --force --options runtime --timestamp --sign "$IDENTITY" \
     "$APP/Contents/Resources/mlx-swift_Cmlx.bundle"
-codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --timestamp \
+    --entitlements Resources/Wispr.entitlements --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 
 SUBMIT_ZIP="dist/notarize-upload.zip"
