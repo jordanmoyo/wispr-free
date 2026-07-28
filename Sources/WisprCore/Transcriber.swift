@@ -33,7 +33,11 @@ public actor Transcriber {
     /// Transcribes 16 kHz mono samples. Returns cleaned text ("" for silence).
     public func transcribe(samples: [Float]) async throws -> String {
         guard let pipeline else { throw WisprError.modelNotLoaded }
-        let results = try await pipeline.transcribe(audioArray: samples)
+        // Without detectLanguage, WhisperKit prefills the decoder with the
+        // <|en|> language token (its defaultLanguageCode), which makes
+        // non-English speech come out translated into English.
+        let options = DecodingOptions(task: .transcribe, detectLanguage: true)
+        let results = try await pipeline.transcribe(audioArray: samples, decodeOptions: options)
         let raw = results.map(\.text).joined(separator: " ")
         return TranscriptCleaner.clean(raw)
     }
