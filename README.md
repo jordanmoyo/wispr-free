@@ -4,6 +4,8 @@ Free, 100% local push-to-talk dictation for macOS. Hold **Fn**, speak,
 release — your words appear in whatever app has focus. No cloud, no account,
 no subscription: audio and text never leave your Mac.
 
+![Wispr Free in action — hold Fn, speak, release](.github/assets/demo.gif)
+
 ## Download
 
 **⬇️ [Download the latest Wispr Free](https://github.com/jordanmoyo/wispr-free/releases/latest)**
@@ -32,6 +34,12 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
   the text typed in automatically, and it never synthesizes Cmd+V. A copy
   always lands on the clipboard as a safety net.
 - **Menu-bar app** with a recording pill overlay while you speak.
+
+<p align="center">
+  <img src=".github/assets/menubar-menu.png" alt="Menu-bar menu: Whisper model picker, AI Cleanup toggle, and cleanup model picker" width="390">
+  &nbsp;&nbsp;
+  <img src=".github/assets/settings.png" alt="Settings window: push-to-talk key, Whisper model, and AI Cleanup options" width="400">
+</p>
 
 ## Requirements
 
