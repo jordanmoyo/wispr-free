@@ -16,7 +16,15 @@ public enum Paster {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        guard let element = focusedTextElement() else { return false }
+        // Some apps (Electron, web views, custom widgets) don't expose their
+        // focused field through AX, so detection failing doesn't mean there is
+        // no text field. Type anyway: whatever has keyboard focus receives the
+        // events, and the clipboard copy above remains as a manual fallback.
+        guard let element = focusedTextElement() else {
+            typeUnicode(text)
+            WisprLog.log("Paster: no AX text element, typed as unicode events")
+            return true
+        }
         if insertViaAX(text, into: element) {
             WisprLog.log("Paster: inserted via AX")
         } else {
