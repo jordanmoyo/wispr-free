@@ -17,7 +17,8 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
 ## Features
 
 - **On-device transcription** with [WhisperKit](https://github.com/argmaxinc/WhisperKit)
-  running Whisper `large-v3`.
+  running Whisper `large-v3`. The spoken language is auto-detected and
+  transcribed as-is — never translated.
 - **Optional AI cleanup** of transcripts with an on-device LLM
   ([MLX](https://github.com/ml-explore/mlx-swift)): removes filler words,
   fixes punctuation, formats spoken URLs and emails. Five selectable models
@@ -26,8 +27,10 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
   English, French stays French, and mixed-language dictation keeps its
   code-switching exactly where you spoke it.
 - **Types anywhere**: text is delivered through the Accessibility API with a
-  Unicode-keystroke fallback — native apps, Electron apps, terminals, and it
-  never synthesizes Cmd+V.
+  Unicode-keystroke fallback — native apps, Electron apps, web views,
+  terminals. Even apps that hide their text fields from Accessibility get
+  the text typed in automatically, and it never synthesizes Cmd+V. A copy
+  always lands on the clipboard as a safety net.
 - **Menu-bar app** with a recording pill overlay while you speak.
 
 ## Requirements
@@ -69,6 +72,29 @@ open dist
 > [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Unit tests need none of that: `swift test` works anywhere.
+
+## Changelog
+
+### 0.1.3
+- **Fixed:** dictated text required a manual ⌘V in apps that don't expose
+  their focused text field through the Accessibility API (many Electron
+  apps, web views, custom widgets). Text is now typed automatically into
+  whatever has keyboard focus, with the clipboard copy kept as a backup.
+
+### 0.1.2
+- **Fixed:** non-English dictation was translated into English. The spoken
+  language is now auto-detected and transcribed verbatim — French stays
+  French, and mixed-language dictation keeps its code-switching.
+
+### 0.1.1
+- **Fixed:** every dictation produced only "you". The v0.1.0 release build
+  was signed without the microphone entitlement, so macOS silently denied
+  audio recording (no permission prompt, no entry in System Settings) and
+  Whisper transcribed silence. Do not use v0.1.0.
+
+### 0.1.0
+- Initial release: push-to-talk dictation (hold Fn), Whisper `large-v3`
+  transcription, optional on-device AI cleanup, notarized Apple Silicon app.
 
 ## License
 
