@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3561"></stop>
+      <stop offset="1" stop-color="#1a1d3a"></stop>
+    </linearGradient>
+    <linearGradient id="edgeHi" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"></stop>
+      <stop offset="0.25" stop-color="#ffffff" stop-opacity="0"></stop>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="20"></feGaussianBlur>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bgGrad)"></rect>
+  <rect x="103" y="103" width="818" height="818" rx="182" fill="none" stroke="url(#edgeHi)" stroke-width="6"></rect>
+  <rect x="262" y="418" width="500" height="188" rx="94" fill="#f5c518" filter="url(#glow)" opacity="0.5"></rect>
+  <rect x="262" y="418" width="500" height="188" rx="94" fill="#f5c518"></rect>
+  <g fill="#1a1d3a">
+    <rect x="397" y="488" width="24" height="48" rx="12"></rect>
+    <rect x="449" y="470" width="24" height="84" rx="12"></rect>
+    <rect x="501" y="452" width="24" height="120" rx="12"></rect>
+    <rect x="553" y="470" width="24" height="84" rx="12"></rect>
+    <rect x="605" y="488" width="24" height="48" rx="12"></rect>
+  </g>
+</svg>

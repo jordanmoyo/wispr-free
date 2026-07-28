@@ -1,0 +1,8 @@
+.build/
+dist/
+*.profraw
+.superpowers/
+.DS_Store
+*.keychain
+*.keychain-db
+.worktrees/
