@@ -246,6 +246,19 @@ public final class AppController: NSObject {
                     guard let self else { return }
                     self.buildMenu()
                     Task { await self.loadSelectedModel() }
+                },
+                onCleanupToggle: { [weak self] enabled in
+                    guard let self else { return }
+                    self.buildMenu()
+                    if !enabled {
+                        Task { await self.cleanupEngine.unload() }
+                    }
+                },
+                onCleanupModelChange: { [weak self] _ in
+                    guard let self else { return }
+                    self.buildMenu()
+                    // Lazy reload on next dictation, same as the menu path.
+                    Task { await self.cleanupEngine.unload() }
                 })
         }
         settingsWindow?.show()
