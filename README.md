@@ -4,6 +4,16 @@ Free, 100% local push-to-talk dictation for macOS. Hold **Fn**, speak,
 release — your words appear in whatever app has focus. No cloud, no account,
 no subscription: audio and text never leave your Mac.
 
+## Download
+
+**⬇️ [Download the latest Wispr Free](https://github.com/jordanmoyo/wispr-free/releases/latest)**
+— grab `WisprFree-<version>-arm64.zip` under "Assets".
+
+The app comes ready to use: signed and notarized by Apple, for Apple Silicon
+Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
+**Wispr Free.app** to `/Applications`, open, and dictate. Full steps in
+[Install](#install) below.
+
 ## Features
 
 - **On-device transcription** with [WhisperKit](https://github.com/argmaxinc/WhisperKit)
@@ -31,9 +41,9 @@ no subscription: audio and text never leave your Mac.
 
 ## Install
 
-1. Download `WisprFree-<version>-arm64.zip` from
-   [Releases](https://github.com/jordanmoyo/wispr-free/releases), unzip, and
-   move **Wispr Free.app** to `/Applications`.
+1. Download `WisprFree-<version>-arm64.zip` from the
+   [latest release](https://github.com/jordanmoyo/wispr-free/releases/latest)
+   ("Assets" section), unzip, and move **Wispr Free.app** to `/Applications`.
 2. Open it. The app is notarized by Apple, so it opens normally.
 3. Grant the three permissions it asks for (all required for dictation):
    **Microphone** (recording), **Input Monitoring** (detecting the held Fn
