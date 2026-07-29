@@ -6,7 +6,7 @@ cask "wispr-free" do
   desc "Free local push-to-talk dictation"
   homepage "https://github.com/jordanmoyo/wispr-free"
   depends_on arch: :arm64
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
   app "Wispr Free.app"
   livecheck do
     url :url
