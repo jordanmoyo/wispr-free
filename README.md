@@ -108,6 +108,10 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.3.2
+- **Added:** a small note on the About pane inviting you to star the repo
+  on GitHub if you enjoy the app.
+
 ### 0.3.1
 - **Fixed:** the app now shows a Dock icon (and appears in Cmd-Tab) while
   the main window is open, returning to menu-bar-only when it closes.
