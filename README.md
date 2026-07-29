@@ -108,6 +108,13 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.2.1
+- **Fixed:** the AI cleanup model could translate non-English dictation to
+  English despite being told not to (e.g. an all-French transcript delivered
+  in English). A deterministic on-device language check now compares the
+  cleanup output's language against the transcript's and delivers the raw
+  transcript whenever they differ — translation can never reach your cursor.
+
 ### 0.2.0
 - **Added:** dictation history and analytics window — search past
   transcripts, see total dictations, total words, words this week, and

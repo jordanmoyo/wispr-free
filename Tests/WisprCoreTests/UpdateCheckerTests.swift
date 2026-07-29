@@ -104,12 +104,15 @@ private final class SequencedTransport: UpdateTransport, @unchecked Sendable {
     }
 
     func fetchLatestReleaseJSON() async throws -> Data {
-        lock.lock()
-        let next = results.count > 1 ? results.removeFirst() : results[0]
-        lock.unlock()
-        switch next {
+        switch nextResult() {
         case .success(let data): return data
         case .failure(let error): throw error
         }
+    }
+
+    private func nextResult() -> Result<Data, Error> {
+        lock.lock()
+        defer { lock.unlock() }
+        return results.count > 1 ? results.removeFirst() : results[0]
     }
 }

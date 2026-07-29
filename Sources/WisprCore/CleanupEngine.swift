@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 public enum CleanupPrompt {
     public static let system = """
@@ -67,6 +68,33 @@ public enum CleanupPrompt {
         text.replacingOccurrences(of: "<transcript>", with: "")
             .replacingOccurrences(of: "</transcript>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True when `output`'s dominant language matches `input`'s, or when
+    /// either text is too short or too ambiguous to classify confidently.
+    ///
+    /// The length-based `plausibleCleanup` guard can't catch translation —
+    /// a translated transcript is about the same size as the original. The
+    /// system prompt forbids translating, but small models sometimes ignore
+    /// it (observed 2026-07-29: an all-French transcript delivered in
+    /// English). This is the deterministic backstop: language classified
+    /// on-device with `NLLanguageRecognizer`, and any uncertainty fails
+    /// open (returns true) so legitimate cleanups are never rejected.
+    public static func sameDominantLanguage(input: String, output: String) -> Bool {
+        guard let inLang = confidentDominantLanguage(of: input),
+              let outLang = confidentDominantLanguage(of: output) else { return true }
+        return inLang == outLang
+    }
+
+    private static func confidentDominantLanguage(of text: String) -> NLLanguage? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Short snippets classify unreliably ("oui" alone is ambiguous).
+        guard trimmed.count >= 20 else { return nil }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(trimmed)
+        guard let lang = recognizer.dominantLanguage else { return nil }
+        let confidence = recognizer.languageHypotheses(withMaximum: 1)[lang] ?? 0
+        return confidence >= 0.6 ? lang : nil
     }
 }
 
@@ -147,6 +175,10 @@ public actor CleanupEngine {
             }
             guard CleanupPrompt.plausibleCleanup(input: text, output: trimmed) else {
                 WisprLog.log("cleanup: implausible output (\(text.count) chars in, \(trimmed.count) out), fail-open")
+                return text
+            }
+            guard CleanupPrompt.sameDominantLanguage(input: text, output: trimmed) else {
+                WisprLog.log("cleanup: output language differs from input (translation), fail-open")
                 return text
             }
             return trimmed

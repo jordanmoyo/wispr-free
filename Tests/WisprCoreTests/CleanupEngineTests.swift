@@ -297,6 +297,35 @@ final class CleanupPromptTests: XCTestCase {
         XCTAssertFalse(result.contains("multi word"))
         XCTAssertTrue(result.contains("\"recete\" → \"receipt\""))
     }
+
+    // Real-world regression (2026-07-29): qwen3-4b translated an entirely
+    // French transcript into English despite the prompt's NEVER-translate
+    // rule; the plausibility guard passed it because translation preserves
+    // length. These exercise the deterministic language guard.
+    func testSameDominantLanguageRejectsFrenchTranslatedToEnglish() {
+        let raw = "Là, je parle en français. Mais qu'est-ce que si je change "
+            + "d'anglais? Est-ce que vous pouvez encore écouter les changements de langue?"
+        let translated = "I am speaking in French. But what if I switch to "
+            + "English? Can you still hear the language changes?"
+        XCTAssertFalse(CleanupPrompt.sameDominantLanguage(input: raw, output: translated))
+    }
+
+    func testSameDominantLanguageAcceptsFrenchCleanedAsFrench() {
+        let raw = "là je parle en français est-ce que vous pouvez écouter les changements"
+        let cleaned = "Là, je parle en français. Est-ce que vous pouvez écouter les changements ?"
+        XCTAssertTrue(CleanupPrompt.sameDominantLanguage(input: raw, output: cleaned))
+    }
+
+    func testSameDominantLanguageAcceptsEnglishCleanedAsEnglish() {
+        let raw = "um so how do you want me to test everything that you build"
+        let cleaned = "How do you want me to test everything you build?"
+        XCTAssertTrue(CleanupPrompt.sameDominantLanguage(input: raw, output: cleaned))
+    }
+
+    func testSameDominantLanguageFailsOpenOnShortText() {
+        XCTAssertTrue(CleanupPrompt.sameDominantLanguage(input: "ok", output: "OK."))
+        XCTAssertTrue(CleanupPrompt.sameDominantLanguage(input: "oui", output: "Yes."))
+    }
 }
 
 final class CleanupEngineGuardTests: XCTestCase {
