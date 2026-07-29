@@ -83,6 +83,13 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.1.4
+- **Fixed:** the AI cleanup model could answer question-shaped dictation
+  instead of cleaning it (e.g. dictating "can you tell me…" produced an
+  invented reply). Transcripts are now passed as clearly-marked data, and a
+  plausibility guard delivers the raw transcript whenever the model's output
+  doesn't look like a cleanup — hallucinated text can never reach your cursor.
+
 ### 0.1.3
 - **Fixed:** dictated text required a manual ⌘V in apps that don't expose
   their focused text field through the Accessibility API (many Electron

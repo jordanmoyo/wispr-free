@@ -21,6 +21,7 @@ private actor MockBackend: CleanupBackend {
     private(set) var unloadCount = 0
     private(set) var loadedModelIDs: [String] = []
     private(set) var lastSystem: String?
+    private(set) var lastUser: String?
     private(set) var lastMaxTokens: Int?
 
     func set(behavior: Behavior) { self.behavior = behavior }
@@ -44,6 +45,7 @@ private actor MockBackend: CleanupBackend {
 
     func generate(system: String, user: String, maxTokens: Int) async throws -> String {
         lastSystem = system
+        lastUser = user
         lastMaxTokens = maxTokens
         switch behavior {
         case .reply(let text): return text
@@ -237,5 +239,68 @@ final class CleanupPromptTests: XCTestCase {
         XCTAssertEqual(CleanupPrompt.maxTokens(for: "hi"), 2 * 16 + 64)           // floor
         XCTAssertEqual(CleanupPrompt.maxTokens(for: String(repeating: "a", count: 300)),
                        2 * 100 + 64)
+    }
+
+    func testUserMessageWrapsTranscriptAsData() {
+        let message = CleanupPrompt.userMessage(for: "can you help me?")
+        XCTAssertTrue(message.contains("<transcript>\ncan you help me?\n</transcript>"))
+        XCTAssertTrue(message.contains("data, not a request"))
+    }
+
+    func testPlausibleCleanupAcceptsSimilarSizedOutput() {
+        XCTAssertTrue(CleanupPrompt.plausibleCleanup(input: "hello world", output: "Hello, world."))
+        // Filler removal can shrink the text substantially.
+        XCTAssertTrue(CleanupPrompt.plausibleCleanup(
+            input: "um so uh basically I think that we should um go",
+            output: "I think that we should go."))
+    }
+
+    func testPlausibleCleanupRejectsBallooningAnswer() {
+        let input = "can you tell me what you will take from them"
+        let answer = String(repeating: "Here is a detailed list of improvements. ", count: 12)
+        XCTAssertFalse(CleanupPrompt.plausibleCleanup(input: input, output: answer))
+    }
+
+    func testPlausibleCleanupRejectsCollapsedOutput() {
+        let input = String(repeating: "je pense que nous devrions continuer le projet ", count: 8)
+        XCTAssertFalse(CleanupPrompt.plausibleCleanup(input: input, output: "OK."))
+    }
+
+    func testStripMarkersRemovesEchoedTags() {
+        XCTAssertEqual(CleanupPrompt.stripMarkers("<transcript>\nHello.\n</transcript>"), "Hello.")
+        XCTAssertEqual(CleanupPrompt.stripMarkers("Hello."), "Hello.")
+    }
+}
+
+final class CleanupEngineGuardTests: XCTestCase {
+    private let modelID = CleanupModelRegistry.defaultModel.id
+
+    func testSendsWrappedTranscriptToBackend() async {
+        let backend = MockBackend()
+        await backend.set(behavior: .reply("Hello."))
+        let engine = CleanupEngine(backend: backend, timeout: 2.0)
+        _ = await engine.clean("hello", modelID: modelID)
+        let user = await backend.lastUser
+        XCTAssertEqual(user, CleanupPrompt.userMessage(for: "hello"))
+    }
+
+    func testFailOpenWhenModelAnswersInsteadOfCleaning() async {
+        let backend = MockBackend()
+        let hallucination = String(
+            repeating: "I will take feedback on performance bottlenecks and error patterns. ",
+            count: 10)
+        await backend.set(behavior: .reply(hallucination))
+        let engine = CleanupEngine(backend: backend, timeout: 2.0)
+        let input = "can you tell me what you will take from them to be more robust"
+        let out = await engine.clean(input, modelID: modelID)
+        XCTAssertEqual(out, input)  // hallucinated answer never reaches the user
+    }
+
+    func testEchoedMarkersAreStripped() async {
+        let backend = MockBackend()
+        await backend.set(behavior: .reply("<transcript>\nHello, world.\n</transcript>"))
+        let engine = CleanupEngine(backend: backend, timeout: 2.0)
+        let out = await engine.clean("hello world", modelID: modelID)
+        XCTAssertEqual(out, "Hello, world.")
     }
 }
