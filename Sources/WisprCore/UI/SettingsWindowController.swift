@@ -5,33 +5,37 @@ public final class SettingsWindowController {
     private var window: NSWindow?
     private let makeView: () -> AnyView
 
-    public init(settings: SettingsStore, modelStore: ModelStore,
-                onHotkeyChange: @escaping (Int64) -> Void,
-                onModelChange: @escaping (String) -> Void,
-                onCleanupToggle: @escaping (Bool) -> Void,
-                onCleanupModelChange: @escaping (String) -> Void) {
+    public init(settings: SettingsStore, modelStore: ModelStore, actions: SettingsActions) {
         makeView = {
-            AnyView(SettingsView(settings: settings, modelStore: modelStore,
-                                 onHotkeyChange: onHotkeyChange,
-                                 onModelChange: onModelChange,
-                                 onCleanupToggle: onCleanupToggle,
-                                 onCleanupModelChange: onCleanupModelChange))
+            AnyView(SettingsView(settings: settings, modelStore: modelStore, actions: actions))
         }
     }
 
     public func show() {
-        if window == nil {
+        let targetWindow: NSWindow
+        if let existing = window {
+            targetWindow = existing
+        } else {
             let newWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 420, height: 460),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false)
             newWindow.title = "Wispr Settings"
-            newWindow.contentView = NSHostingView(rootView: makeView())
             newWindow.isReleasedWhenClosed = false
             newWindow.center()
             window = newWindow
+            targetWindow = newWindow
         }
-        window?.makeKeyAndOrderFront(nil)
+
+        let hostingView = NSHostingView(rootView: makeView())
+        // Track SwiftUI's preferred size so the window grows/shrinks when the
+        // user switches to a taller tab (fittingSize alone is a one-shot
+        // measurement of the initially selected tab).
+        hostingView.sizingOptions = [.preferredContentSize]
+        targetWindow.contentView = hostingView
+        targetWindow.setContentSize(hostingView.fittingSize)
+
+        targetWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

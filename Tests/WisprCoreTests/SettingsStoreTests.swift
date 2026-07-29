@@ -40,4 +40,69 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(SettingsStore(defaults: defaults).cleanupEnabled)
         XCTAssertEqual(SettingsStore(defaults: defaults).cleanupModelID, "qwen2.5-1.5b")
     }
+
+    func testUpdateCheckDefaultsToEnabled() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertTrue(store.updateCheckEnabled)
+    }
+
+    func testPersistsUpdateCheckSetting() {
+        let store = SettingsStore(defaults: defaults)
+        store.updateCheckEnabled = false
+        XCTAssertFalse(SettingsStore(defaults: defaults).updateCheckEnabled)
+    }
+
+    func testHistoryEnabledDefaultsToTrue() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertTrue(store.historyEnabled)
+    }
+
+    func testPersistsHistoryEnabledSetting() {
+        let store = SettingsStore(defaults: defaults)
+        store.historyEnabled = false
+        XCTAssertFalse(SettingsStore(defaults: defaults).historyEnabled)
+    }
+
+    func testLearningEnabledDefaultsToTrue() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertTrue(store.learningEnabled)
+    }
+
+    func testPersistsLearningEnabledSetting() {
+        let store = SettingsStore(defaults: defaults)
+        store.learningEnabled = false
+        XCTAssertFalse(SettingsStore(defaults: defaults).learningEnabled)
+    }
+
+    func testDeliveryRulesDefaultsToEmpty() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertEqual(store.deliveryRules, [])
+    }
+
+    func testPersistsDeliveryRules() {
+        let store = SettingsStore(defaults: defaults)
+        let rules = [
+            DeliveryRule(bundleID: "com.apple.Terminal", displayName: "Terminal", mode: .insert),
+            DeliveryRule(bundleID: "com.example.App", displayName: "App", mode: .insertAndSend),
+        ]
+        store.deliveryRules = rules
+        XCTAssertEqual(SettingsStore(defaults: defaults).deliveryRules, rules)
+    }
+
+    func testPreRollEnabledDefaultsToFalse() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertFalse(store.preRollEnabled)
+    }
+
+    func testPersistsPreRollEnabledSetting() {
+        let store = SettingsStore(defaults: defaults)
+        store.preRollEnabled = true
+        XCTAssertTrue(SettingsStore(defaults: defaults).preRollEnabled)
+    }
+
+    func testCorruptDeliveryRulesDataDecodesToEmpty() {
+        defaults.set(Data([0x00, 0x01, 0x02]), forKey: "deliveryRules")
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertEqual(store.deliveryRules, [])
+    }
 }

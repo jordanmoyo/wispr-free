@@ -18,7 +18,14 @@ avoid the three traps that cost us days.
   - `ModelRegistry.swift`, `ModelStore.swift` — model metadata and on-disk layout
   - `Paster.swift` — text delivery (AX selected-text, Unicode keystroke fallback; never Cmd+V)
   - `Permissions.swift`, `SettingsStore.swift`, `WisprError.swift`, `WisprLog.swift`
-  - `UI/` — menu-bar status item, recording pill overlay, settings window
+  - `TranscriptionOptions.swift` — maps a pinned dictation language to WhisperKit decode options
+  - `UpdateChecker.swift` — daily GitHub-releases version check (fail-open, ETag-cached)
+  - `HistoryStore.swift`, `HistoryStats.swift`, `HistorySearch.swift` — JSONL-backed dictation history, analytics, and search
+  - `WordDiff.swift` — word-level diff between raw and edited transcript, used to derive corrections
+  - `CorrectionStore.swift`, `CorrectionApplier.swift` — learned wrong→right corrections store and deterministic replacement
+  - `DeliveryRules.swift` — per-app delivery mode (insert / copy-only / insert-and-send) with runtime safety degradations
+  - `RingBuffer.swift` — fixed-capacity sample buffer backing the opt-in pre-roll audio capture
+  - `UI/` — menu-bar status item, recording pill overlay, settings window (now tabbed), history window
 - `Tests/WisprCoreTests/` — unit tests (no MLX inference, no GPU, no network)
 - `scripts/` — build/packaging/release scripts
 - `Resources/` — Info.plist, app icon (SVG masters included); the menu-bar glyph is drawn in code

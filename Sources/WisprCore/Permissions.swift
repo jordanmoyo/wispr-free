@@ -53,4 +53,11 @@ public enum DictationGate {
     public static func shouldTranscribe(samples: [Float]) -> Bool {
         Double(samples.count) / AudioResampler.targetSampleRate >= minimumSeconds
     }
+
+    /// Same gate as `shouldTranscribe(samples:)`, but against a sample count
+    /// directly (used when the samples array includes pre-roll seed audio
+    /// that shouldn't count toward the "did the user actually speak" check).
+    public static func shouldTranscribe(sampleCount: Int) -> Bool {
+        Double(sampleCount) / AudioResampler.targetSampleRate >= minimumSeconds
+    }
 }

@@ -34,7 +34,10 @@ let package = Package(
         ),
         .testTarget(
             name: "WisprCoreTests",
-            dependencies: ["WisprCore"],
+            dependencies: [
+                "WisprCore",
+                .product(name: "WhisperKit", package: "WhisperKit"),
+            ],
             path: "Tests/WisprCoreTests"
         ),
     ]

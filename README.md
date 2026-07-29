@@ -1,8 +1,10 @@
 # Wispr Free
 
-Free, 100% local push-to-talk dictation for macOS. Hold **Fn**, speak,
-release — your words appear in whatever app has focus. No cloud, no account,
-no subscription: audio and text never leave your Mac.
+Free push-to-talk dictation for macOS. Hold **Fn**, speak, release — your
+words appear in whatever app has focus. No cloud, no account, no
+subscription: Wispr Free never sends your audio or text anywhere. See
+[PRIVACY.md](PRIVACY.md) for the full picture, including the one optional
+network call it makes (a daily update check).
 
 ![Wispr Free in action — hold Fn, speak, release](.github/assets/demo.gif)
 
@@ -34,6 +36,22 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
   the text typed in automatically, and it never synthesizes Cmd+V. A copy
   always lands on the clipboard as a safety net.
 - **Menu-bar app** with a recording pill overlay while you speak.
+- **Dictation history** with search and analytics (total dictations, total
+  words, words this week, words per minute) in a dedicated History window —
+  stored locally, easy to clear.
+- **Per-app delivery rules**: choose per app whether text is typed
+  automatically, copied only, or typed and sent with Return (e.g. for chat
+  apps).
+- **Correction learning**: edits you make to a delivered transcript are
+  remembered and applied automatically next time the same word comes up.
+- **Pinned transcription language**, for when auto-detection guesses wrong
+  on a short or ambiguous clip.
+- **Pre-roll audio buffer** (opt-in): keeps a rolling few seconds of audio
+  before you hold Fn, so dictation doesn't clip the first word if you start
+  speaking right as you press the key.
+- **Automatic update check**: once a day, a lightweight check against GitHub
+  releases lets you know when a new version is out. Optional — see
+  [PRIVACY.md](PRIVACY.md).
 
 <p align="center">
   <img src=".github/assets/menubar-menu.png" alt="Menu-bar menu: Whisper model picker, AI Cleanup toggle, and cleanup model picker" width="390">
@@ -55,6 +73,13 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
 1. Download `WisprFree-<version>-arm64.zip` from the
    [latest release](https://github.com/jordanmoyo/wispr-free/releases/latest)
    ("Assets" section), unzip, and move **Wispr Free.app** to `/Applications`.
+
+   Alternatively, with [Homebrew](https://brew.sh):
+   ```sh
+   brew install --cask jordanmoyo/tap/wispr-free
+   ```
+   (tap goes live with the 0.2.0 release). Brew users update with
+   `brew upgrade`.
 2. Open it. The app is notarized by Apple, so it opens normally.
 3. Grant the three permissions it asks for (all required for dictation):
    **Microphone** (recording), **Input Monitoring** (detecting the held Fn
@@ -82,6 +107,24 @@ open dist
 Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
+
+### 0.2.0
+- **Added:** dictation history and analytics window — search past
+  transcripts, see total dictations, total words, words this week, and
+  words per minute.
+- **Added:** correction learning — edits to a delivered transcript are
+  remembered and applied automatically next time.
+- **Added:** per-app delivery rules, including insert-and-send (type, then
+  press Return) for apps like chat clients.
+- **Added:** pinned transcription language, for when auto-detection guesses
+  wrong.
+- **Added:** opt-in pre-roll audio buffer, so dictation doesn't clip the
+  first word.
+- **Added:** automatic update checker (daily, optional, off in
+  Settings → General).
+- **Changed:** Settings window reorganized into tabs.
+- **Added:** [PRIVACY.md](PRIVACY.md) — a full accounting of what's stored
+  locally and the one optional network call.
 
 ### 0.1.4
 - **Fixed:** the AI cleanup model could answer question-shaped dictation

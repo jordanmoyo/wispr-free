@@ -13,4 +13,13 @@ final class DictationGateTests: XCTestCase {
         let ok = [Float](repeating: 0.1, count: 8000)
         XCTAssertTrue(DictationGate.shouldTranscribe(samples: ok))
     }
+
+    func testSampleCountAtThresholdAccepted() {
+        // 0.3 s at 16 kHz = 4800 samples
+        XCTAssertTrue(DictationGate.shouldTranscribe(sampleCount: 4800))
+    }
+
+    func testSampleCountBelowThresholdRejected() {
+        XCTAssertFalse(DictationGate.shouldTranscribe(sampleCount: 4799))
+    }
 }

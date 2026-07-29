@@ -1,0 +1,19 @@
+cask "wispr-free" do
+  version "__VERSION__"
+  sha256 "__SHA256__"
+  url "https://github.com/jordanmoyo/wispr-free/releases/download/v#{version}/WisprFree-#{version}-arm64.zip"
+  name "Wispr Free"
+  desc "Free local push-to-talk dictation"
+  homepage "https://github.com/jordanmoyo/wispr-free"
+  depends_on arch: :arm64
+  depends_on macos: ">= :sonoma"
+  app "Wispr Free.app"
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+  zap trash: [
+    "~/Library/Application Support/Wispr",
+    "~/Library/Preferences/com.jordanmoyo.wispr.plist",
+  ]
+end
