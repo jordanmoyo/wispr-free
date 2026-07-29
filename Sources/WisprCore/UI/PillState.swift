@@ -4,6 +4,7 @@ public final class PillState: ObservableObject {
     public enum Phase: Equatable {
         case recording
         case transcribing
+        case cleaning
         case error(String)
     }
 
@@ -15,8 +16,17 @@ public final class PillState: ObservableObject {
     /// Envelope-smoothed voice level (0...1) for display: fast attack,
     /// slow release, like an audio meter — avoids flicker from raw RMS.
     @Published public var displayLevel: Double = 0
+    /// Whether the hold-recording has been "locked" via the shift-tap
+    /// gesture, so the hotkey can be released without stopping it. Settable
+    /// only within the module (`OverlayPill` resets it in `showRecording()`);
+    /// flipped true only via `showLocked()`.
+    @Published public internal(set) var locked = false
 
     public init() {}
+
+    public func showLocked() {
+        locked = true
+    }
 
     public func pushLevel(_ level: Float) {
         levels.append(level)

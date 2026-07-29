@@ -29,7 +29,7 @@ public enum MainTab: String, CaseIterable {
 
 /// What the dictation pipeline is doing right now, for the sidebar header.
 public enum ActivityStatus {
-    case ready, recording, transcribing
+    case ready, recording, transcribing, cleaning
 }
 
 /// Shared state between AppController (which drives activity/hotkey) and
@@ -50,6 +50,7 @@ public final class MainWindowModel: ObservableObject {
         case .ready: return "Ready — \(activationVerb) \(hotkeyLabel) to talk"
         case .recording: return "Recording"
         case .transcribing: return "Transcribing…"
+        case .cleaning: return "Cleaning up…"
         }
     }
 
@@ -57,7 +58,7 @@ public final class MainWindowModel: ObservableObject {
         switch activity {
         case .ready: return Theme.secondaryText
         case .recording: return Theme.darkGold
-        case .transcribing: return Theme.navy
+        case .transcribing, .cleaning: return Theme.navy
         }
     }
 

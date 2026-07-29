@@ -36,6 +36,16 @@ public enum CleanupPrompt {
         system(withHints: hints, vocabulary: vocabulary, tone: nil)
     }
 
+    /// `system` extended with the learned wrong→right hints block and/or a
+    /// user-dictionary block, plus an optional preset tone adjustment;
+    /// delegates with `customToneText: nil`, so a `.custom` tone here emits
+    /// no block (see the four-arg overload).
+    public static func system(withHints hints: [(wrong: String, right: String)],
+                               vocabulary: [String],
+                               tone: TonePreset?) -> String {
+        system(withHints: hints, vocabulary: vocabulary, tone: tone, customToneText: nil)
+    }
+
     /// `system` extended with the learned wrong→right hints block, a
     /// user-dictionary block listing exact terms (proper nouns, jargon,
     /// product names) to preserve verbatim, and/or a per-app tone
@@ -43,11 +53,14 @@ public enum CleanupPrompt {
     /// vocabulary) or as a direct style instruction (tone) rather than
     /// content to change; the hints/vocabulary framing carries the same
     /// defense `userMessage(for:)` applies to the transcript itself. Each
-    /// block is omitted when its input is empty/nil; with all three
-    /// empty/nil, returns `system` unchanged.
+    /// block is omitted when its input is empty/nil; with all inputs
+    /// empty/nil, returns `system` unchanged. `.custom` tone emits a block
+    /// only when `customToneText` is non-nil and non-empty after trimming;
+    /// otherwise (nil/empty text) it's a no-op, same as tone `nil`.
     public static func system(withHints hints: [(wrong: String, right: String)],
                                vocabulary: [String],
-                               tone: TonePreset?) -> String {
+                               tone: TonePreset?,
+                               customToneText: String? = nil) -> String {
         let singleWordHints = hints.filter {
             !$0.wrong.contains(where: \.isWhitespace) && !$0.right.contains(where: \.isWhitespace)
         }
@@ -72,6 +85,20 @@ public enum CleanupPrompt {
             case .formal:
                 result += "\n\nAdjust the register to be polished and professional — "
                     + "no slang, complete sentences. Keep the meaning and language unchanged."
+            case .custom:
+                // Defense in depth: `DeliveryRule.sanitizeCustomTone` is
+                // also applied at the UI write path, but a hand-edited
+                // settings JSON could carry unsanitized (multi-line,
+                // over-length) text straight into `customToneText`. Never
+                // trust the stored value verbatim this close to the
+                // model — re-sanitize here so the prompt-shape invariant
+                // (single line, ≤200 chars) holds regardless of how the
+                // value arrived.
+                let sanitized = DeliveryRule.sanitizeCustomTone(customToneText ?? "")
+                if !sanitized.isEmpty {
+                    result += "\n\nAdjust the register per the user's stated preference: \(sanitized). "
+                        + "Keep the meaning and language unchanged."
+                }
             }
         }
         return result
@@ -244,11 +271,13 @@ public actor CleanupEngine {
     public func clean(_ text: String, modelID: String,
                       hints: [(wrong: String, right: String)] = [],
                       vocabulary: [String] = [],
-                      tone: TonePreset? = nil) async -> String {
+                      tone: TonePreset? = nil,
+                      customToneText: String? = nil) async -> String {
         await runGuardedGeneration(
             text,
             modelID: modelID,
-            system: CleanupPrompt.system(withHints: hints, vocabulary: vocabulary, tone: tone),
+            system: CleanupPrompt.system(withHints: hints, vocabulary: vocabulary, tone: tone,
+                                         customToneText: customToneText),
             maxTokens: CleanupPrompt.maxTokens(for: text),
             plausible: CleanupPrompt.plausibleCleanup,
             logPrefix: "cleanup"

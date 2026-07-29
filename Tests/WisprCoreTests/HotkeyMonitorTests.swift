@@ -86,4 +86,40 @@ final class HotkeyMonitorTests: XCTestCase {
         XCTAssertEqual(presses, 1)
         XCTAssertEqual(releases, 1)
     }
+
+    func testShiftTapWhileHotkeyHeldFiresOnLockTap() {
+        let monitor = HotkeyMonitor()   // keyCode 63 (Fn) default
+        var lockTaps = 0
+        monitor.onLockTap = { lockTaps += 1 }
+        // Hold Fn: flagsChanged with Fn mask, code 63.
+        monitor.handle(type: .flagsChanged, event: event(type: .flagsChanged, code: 63, flags: .maskSecondaryFn))
+        // Tap left Shift (code 56) while Fn still held: shift mask appears...
+        monitor.handle(type: .flagsChanged,
+                       event: event(type: .flagsChanged, code: 56, flags: [.maskSecondaryFn, .maskShift]))
+        // ...and disappears.
+        monitor.handle(type: .flagsChanged, event: event(type: .flagsChanged, code: 56, flags: .maskSecondaryFn))
+        waitForMain()
+        XCTAssertEqual(lockTaps, 1)
+    }
+
+    func testShiftTapWithoutHotkeyHeldDoesNotFire() {
+        let monitor = HotkeyMonitor()
+        var lockTaps = 0
+        monitor.onLockTap = { lockTaps += 1 }
+        monitor.handle(type: .flagsChanged, event: event(type: .flagsChanged, code: 56, flags: .maskShift))
+        monitor.handle(type: .flagsChanged, event: event(type: .flagsChanged, code: 56, flags: []))
+        waitForMain()
+        XCTAssertEqual(lockTaps, 0)
+    }
+
+    func testShiftHotkeyDisablesLockGesture() {
+        let monitor = HotkeyMonitor()
+        monitor.keyCode = 56  // hotkey IS left Shift
+        var lockTaps = 0
+        monitor.onLockTap = { lockTaps += 1 }
+        monitor.handle(type: .flagsChanged, event: event(type: .flagsChanged, code: 56, flags: .maskShift))
+        monitor.handle(type: .flagsChanged, event: event(type: .flagsChanged, code: 60, flags: .maskShift))
+        waitForMain()
+        XCTAssertEqual(lockTaps, 0)
+    }
 }

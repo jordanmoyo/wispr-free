@@ -8,7 +8,10 @@ makes.
 ## What never leaves your Mac
 
 - **Audio** — captured from your microphone, resampled, and transcribed
-  entirely on-device with WhisperKit. It's never uploaded.
+  entirely on-device with WhisperKit. It's never uploaded. By default it's
+  discarded immediately after transcription; if you opt into "Keep audio
+  with history" (Settings → Privacy, off by default), each dictation's raw
+  audio is archived locally — see below.
 - **Transcripts** — both the raw Whisper output and the optional AI-cleaned
   version are produced on-device (WhisperKit and the MLX cleanup model both
   run locally). Neither is sent anywhere.
@@ -28,6 +31,7 @@ Wispr Free writes to `~/Library/Application Support/Wispr/`:
 | --- | --- | --- |
 | `history.jsonl` | Your dictation history: transcript, target app, timestamp, word count | `0600`, excluded from Time Machine backups |
 | `corrections.json` | Learned wrong→right correction pairs | `0600`, excluded from Time Machine backups |
+| `audio/<history-entry-UUID>.wav` | Opt-in only ("Keep audio with history", off by default): each dictation's raw audio as 16-bit PCM mono 16 kHz WAV, capped at the last 100 files (oldest evicted first) | `0600`, excluded from Time Machine backups |
 | `models/` | Downloaded Whisper and cleanup models | — |
 
 `0600` means only your macOS user account can read these files, and macOS's
@@ -42,9 +46,15 @@ language, toggles) live in `UserDefaults`, not in these files.
 ### Purging your data
 
 - **One entry:** open the History window (menu bar → History) and delete it.
+  If that entry has archived audio, its WAV file is deleted too.
 - **All history:** History window → **Clear History…**. Check "Also forget
-  learned corrections" to wipe corrections at the same time.
+  learned corrections" to wipe corrections at the same time. This also
+  purges any archived audio.
 - **Just corrections:** History window → corrections list → **Forget All**.
+- **Archived audio:** turning off "Keep audio with history" (Settings →
+  Privacy) immediately deletes every archived WAV file. Settings → Privacy →
+  **Delete All Data…** also purges the archive along with history and
+  corrections.
 - **Everything, including models:** `brew uninstall --zap wispr-free` if you
   installed via Homebrew, or manually delete
   `~/Library/Application Support/Wispr/` and drag the app to the Trash.

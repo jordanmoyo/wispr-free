@@ -16,7 +16,10 @@ struct PushToTalkPane: View {
                 keyCard
                     .padding(.bottom, 20)
 
-                SettingsRow(title: "Activation") {
+                SettingsRow(title: "Activation",
+                            caption: activationMode == .hold
+                                ? "While holding, tap ⇧ to lock — press the key again to stop."
+                                : nil) {
                     segmentedControl
                 }
                 SettingsRow(title: "Recording pill position",
@@ -128,33 +131,10 @@ struct PushToTalkPane: View {
                     .padding(.vertical, 10)
             } else {
                 ForEach($deliveryRules) { $rule in
-                    SettingsRow(title: rule.displayName) {
-                        HStack(spacing: 8) {
-                            Picker("", selection: $rule.mode) {
-                                Text("Type automatically").tag(DeliveryMode.insert)
-                                Text("Copy only").tag(DeliveryMode.copyOnly)
-                                Text("Type and press Return").tag(DeliveryMode.insertAndSend)
-                            }
-                            .labelsHidden()
-                            .frame(width: 190)
-                            .onChange(of: rule.mode) { _, _ in persistDeliveryRules() }
-                            Picker("", selection: $rule.tone) {
-                                Text("Default tone").tag(TonePreset?.none)
-                                Text("Casual").tag(TonePreset?.some(.casual))
-                                Text("Formal").tag(TonePreset?.some(.formal))
-                            }
-                            .labelsHidden()
-                            .frame(width: 120)
-                            .onChange(of: rule.tone) { _, _ in persistDeliveryRules() }
-                            Button("Remove") {
-                                deliveryRules.removeAll { $0.bundleID == rule.bundleID }
-                                persistDeliveryRules()
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.destructive)
-                        }
-                    }
+                    DeliveryRuleRow(rule: $rule, onRemove: {
+                        deliveryRules.removeAll { $0.bundleID == rule.bundleID }
+                        persistDeliveryRules()
+                    }, onPersist: persistDeliveryRules)
                 }
             }
             HStack {
@@ -182,5 +162,80 @@ struct PushToTalkPane: View {
     private func persistDeliveryRules() {
         context.settings.deliveryRules = deliveryRules
         context.actions.onRulesChange()
+    }
+}
+
+/// One delivery-rule row: mode picker, tone picker, remove button, and (when
+/// `tone == .custom`) a free-text field for the custom instruction.
+///
+/// The custom-tone field edits a local `@State` copy of the text rather than
+/// writing `rule.toneCustomText` on every keystroke. Sanitizing per-keystroke
+/// (as an earlier version did) is actively harmful: `sanitizeCustomTone`
+/// collapses whitespace runs, so the instant a space is the last-typed
+/// character it gets dropped, SwiftUI re-reads the binding's `get`, and the
+/// field visibly reverts — "warm, first person" could never be typed, only
+/// pasted. Sanitizing exactly once, at submit or focus-loss, keeps the field
+/// a normal text field while still writing a sanitized value to the model.
+private struct DeliveryRuleRow: View {
+    @Binding var rule: DeliveryRule
+    let onRemove: () -> Void
+    let onPersist: () -> Void
+
+    @State private var rawCustomText: String = ""
+    @FocusState private var customFieldFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: rule.displayName, showDivider: rule.tone != .custom) {
+                HStack(spacing: 8) {
+                    Picker("", selection: $rule.mode) {
+                        Text("Type automatically").tag(DeliveryMode.insert)
+                        Text("Copy only").tag(DeliveryMode.copyOnly)
+                        Text("Type and press Return").tag(DeliveryMode.insertAndSend)
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+                    .onChange(of: rule.mode) { _, _ in onPersist() }
+                    Picker("", selection: $rule.tone) {
+                        Text("Default tone").tag(TonePreset?.none)
+                        Text("Casual").tag(TonePreset?.some(.casual))
+                        Text("Formal").tag(TonePreset?.some(.formal))
+                        Text("Custom…").tag(TonePreset?.some(.custom))
+                    }
+                    .labelsHidden()
+                    .frame(width: 120)
+                    .onChange(of: rule.tone) { _, _ in onPersist() }
+                    Button("Remove", action: onRemove)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.destructive)
+                }
+            }
+            if rule.tone == .custom {
+                TextField("e.g. warm, first person, no emoji", text: $rawCustomText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .frame(width: 240)
+                    .padding(.bottom, 13)
+                    .focused($customFieldFocused)
+                    .onAppear { rawCustomText = rule.toneCustomText ?? "" }
+                    .onSubmit { commitCustomText() }
+                    .onChange(of: customFieldFocused) { wasFocused, isFocused in
+                        if wasFocused && !isFocused { commitCustomText() }
+                    }
+                Rectangle().fill(Theme.hairline).frame(height: 1)
+            }
+        }
+    }
+
+    /// Sanitizes the locally-edited text exactly once and writes it back to
+    /// the rule (empty after sanitizing collapses to `nil`), then persists.
+    /// Re-syncs `rawCustomText` to the sanitized value so a field that had
+    /// e.g. trailing whitespace visibly reflects what got saved.
+    private func commitCustomText() {
+        let sanitized = DeliveryRule.sanitizeCustomTone(rawCustomText)
+        rule.toneCustomText = sanitized.isEmpty ? nil : sanitized
+        rawCustomText = sanitized
+        onPersist()
     }
 }

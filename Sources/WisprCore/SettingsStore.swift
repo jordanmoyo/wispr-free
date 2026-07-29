@@ -39,6 +39,7 @@ public final class SettingsStore {
         static let activationMode = "activationMode"
         static let pillPosition = "pillPosition"
         static let inputDeviceUID = "inputDeviceUID"
+        static let retainAudio = "retainAudio"
     }
 
     private let defaults: UserDefaults
@@ -112,6 +113,14 @@ public final class SettingsStore {
     public var feedbackSounds: Bool {
         get { defaults.object(forKey: Keys.feedbackSounds) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.feedbackSounds) }
+    }
+
+    /// Whether each dictation's raw audio is retained on disk (see
+    /// `AudioArchiveStore`) so History can replay or re-transcribe it.
+    /// Opt-in (default off) — audio is normally transcribed and discarded.
+    public var retainAudio: Bool {
+        get { defaults.object(forKey: Keys.retainAudio) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.retainAudio) }
     }
 
     /// Unknown stored values fail open to `.hold` (the historical behavior).

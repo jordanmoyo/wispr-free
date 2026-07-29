@@ -24,14 +24,21 @@ public struct PillView: View {
                         .font(.system(size: 7, weight: .bold))
                         .kerning(1.2)
                         .foregroundStyle(Self.brandNavy.opacity(0.55))
+                    if state.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
                 }
             case .transcribing:
-                // Inverse of the recording state: the brand bars in gold
-                // ripple on a navy capsule while the model works.
-                TranscribingBars()
-                Text("Transcribing")
-                    .font(.caption)
-                    .foregroundStyle(Color.white.opacity(0.92))
+                transcribingContent(label: "Transcribing")
+            case .cleaning:
+                // Same brand-bars body as transcribing, plus a sparkle
+                // glyph marking the AI cleanup/directive-transform step.
+                transcribingContent(label: "Cleaning")
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Self.brandYellow)
             case .error(let message):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.yellow)
@@ -49,7 +56,7 @@ public struct PillView: View {
                     .shadow(color: Self.brandYellow.opacity(0.3 + 0.7 * level),
                             radius: 3 + 9 * level)
                     .animation(.easeInOut(duration: 0.2), value: level)
-            case .transcribing:
+            case .transcribing, .cleaning:
                 Capsule()
                     .fill(Self.brandNavy)
                     .shadow(color: Self.brandYellow.opacity(0.35), radius: 6)
@@ -58,6 +65,17 @@ public struct PillView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    /// Inverse of the recording state: the brand bars in gold ripple on a
+    /// navy capsule while the model works. Shared by `.transcribing` and
+    /// `.cleaning` (which layers a sparkle glyph on top).
+    @ViewBuilder
+    private func transcribingContent(label: String) -> some View {
+        TranscribingBars()
+        Text(label)
+            .font(.caption)
+            .foregroundStyle(Color.white.opacity(0.92))
     }
 }
 

@@ -4,6 +4,7 @@ struct PrivacyPane: View {
     let context: MainWindowContext
 
     @State private var historyEnabled = true
+    @State private var retainAudio = false
     @State private var showDeleteConfirm = false
 
     var body: some View {
@@ -12,7 +13,7 @@ struct PrivacyPane: View {
                 heroCard
                     .padding(.bottom, 20)
 
-                factRow("Audio recordings stored", "Never")
+                factRow("Audio recordings stored", "Never — unless you opt in below")
                 factRow("Transcripts stored", "On this Mac only")
                 factRow("Network access",
                         "Optional update check · model downloads")
@@ -20,6 +21,11 @@ struct PrivacyPane: View {
                 SettingsRow(title: "Keep dictation history",
                             caption: "Turn off to transcribe without saving anything") {
                     ThemeToggle(isOn: $historyEnabled)
+                }
+
+                SettingsRow(title: "Keep audio with history",
+                            caption: "Stores each dictation's audio on this Mac (last 100, WAV) so History can replay and re-transcribe it. Turning this off deletes stored audio.") {
+                    ThemeToggle(isOn: $retainAudio)
                 }
 
                 HStack {
@@ -30,9 +36,18 @@ struct PrivacyPane: View {
                 .padding(.vertical, 16)
             }
         }
-        .onAppear { historyEnabled = context.settings.historyEnabled }
+        .onAppear {
+            historyEnabled = context.settings.historyEnabled
+            retainAudio = context.settings.retainAudio
+        }
         .onChange(of: historyEnabled) { _, enabled in
             context.settings.historyEnabled = enabled
+        }
+        .onChange(of: retainAudio) { _, enabled in
+            context.settings.retainAudio = enabled
+            if !enabled {
+                Task { await context.audioArchive.deleteAll() }
+            }
         }
         .alert("Delete all data?", isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -40,6 +55,7 @@ struct PrivacyPane: View {
                 Task {
                     await context.historyStore.clear()
                     await context.correctionStore.removeAll()
+                    await context.audioArchive.deleteAll()
                     NotificationCenter.default.post(name: .wisprHistoryDidChange, object: nil)
                 }
             }

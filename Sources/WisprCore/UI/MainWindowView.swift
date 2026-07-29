@@ -7,7 +7,11 @@ struct MainWindowContext {
     let historyStore: HistoryStore
     let correctionStore: CorrectionStore
     let vocabularyStore: VocabularyStore
+    let audioArchive: AudioArchiveStore
     let actions: SettingsActions
+    /// History pane hook: re-run a past dictation's archived audio through
+    /// the transcription pipeline again, appending a new entry.
+    let retranscribe: (HistoryEntry) -> Void
 }
 
 /// The unified main window: sidebar navigation (Dictation / Settings /

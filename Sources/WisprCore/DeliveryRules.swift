@@ -12,12 +12,13 @@ public enum DeliveryMode: String, Codable, CaseIterable, Sendable {
 
 /// A per-app register (formality) preference applied to LLM cleanup.
 public enum TonePreset: String, Codable, CaseIterable, Sendable {
-    case casual, formal
+    case casual, formal, custom
 
     public var displayName: String {
         switch self {
         case .casual: return "Casual"
         case .formal: return "Formal"
+        case .custom: return "Custom…"
         }
     }
 }
@@ -32,12 +33,29 @@ public struct DeliveryRule: Codable, Equatable, Identifiable, Sendable {
     /// pre-0.5 persisted JSON without this key decodes to) means no tone
     /// adjustment is applied.
     public var tone: TonePreset?
+    /// Free-text tone instruction, used only when `tone == .custom`. `nil`
+    /// (the default, and what pre-0.6 persisted JSON without this key
+    /// decodes to) means no custom instruction is applied.
+    public var toneCustomText: String?
 
-    public init(bundleID: String, displayName: String, mode: DeliveryMode, tone: TonePreset? = nil) {
+    public init(bundleID: String, displayName: String, mode: DeliveryMode, tone: TonePreset? = nil,
+                toneCustomText: String? = nil) {
         self.bundleID = bundleID
         self.displayName = displayName
         self.mode = mode
         self.tone = tone
+        self.toneCustomText = toneCustomText
+    }
+
+    /// Custom-tone text is folded into the cleanup system prompt, so it is
+    /// normalized the same way dictionary terms are: whitespace/newline
+    /// runs collapse to one space (no instruction-shaped extra lines) and
+    /// length is capped at 200 characters.
+    public static func sanitizeCustomTone(_ raw: String) -> String {
+        let collapsed = raw.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return String(collapsed.prefix(200))
     }
 }
 

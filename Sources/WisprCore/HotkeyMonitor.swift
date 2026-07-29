@@ -5,6 +5,15 @@ public final class HotkeyMonitor {
     public var keyCode: Int64 = 63  // Fn
     public var onPress: (() -> Void)?
     public var onRelease: (() -> Void)?
+    /// Fired when a Shift key is pressed while the hotkey is held — the
+    /// hold-lock gesture. Shift is used (not Space, as some apps do)
+    /// because the tap is .listenOnly and cannot swallow a real keystroke;
+    /// a modifier emits no character into the focused field. Disabled when
+    /// the hotkey itself is a Shift key.
+    public var onLockTap: (() -> Void)?
+
+    private static let shiftKeyCodes: Set<Int64> = [56, 60]
+    private var shiftWasDown = false
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -62,6 +71,7 @@ public final class HotkeyMonitor {
         tap = nil
         runLoopSource = nil
         isDown = false
+        shiftWasDown = false
     }
 
     private var eventsSeen = 0
@@ -76,6 +86,14 @@ public final class HotkeyMonitor {
         eventsSeen += 1
         if eventsSeen <= 5 {
             WisprLog.log("HotkeyMonitor: event #\(eventsSeen) type=\(type.rawValue) code=\(code) flags=\(event.flags.rawValue)")
+        }
+        if type == .flagsChanged, Self.shiftKeyCodes.contains(code),
+           !Self.shiftKeyCodes.contains(keyCode) {
+            let shiftDown = event.flags.contains(.maskShift)
+            if shiftDown && !shiftWasDown && isDown {
+                DispatchQueue.main.async { [weak self] in self?.onLockTap?() }
+            }
+            shiftWasDown = shiftDown
         }
         if let mask = Self.modifierMasks[keyCode] {
             // Modifier keys never emit keyDown/keyUp — only flagsChanged.

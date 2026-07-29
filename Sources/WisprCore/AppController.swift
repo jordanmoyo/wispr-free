@@ -10,6 +10,7 @@ public final class AppController: NSObject {
     private let historyStore = HistoryStore.defaultStore()
     private let correctionStore = CorrectionStore.defaultStore()
     private let vocabularyStore = VocabularyStore.defaultStore()
+    private let audioArchive = AudioArchiveStore.defaultStore()
     private let hotkey = HotkeyMonitor()
     private let recorder = Recorder()
     private let pill = OverlayPill()
@@ -23,6 +24,10 @@ public final class AppController: NSObject {
     private enum Phase { case idle, recording, transcribing }
     private var phase: Phase = .idle
     private var modelReady = false
+    /// Whether the current hold-mode recording has been "locked" via the
+    /// shift-tap gesture (`HotkeyMonitor.onLockTap`) — while true, releasing
+    /// the hotkey does not stop the recording; pressing it again does.
+    private var holdLocked = false
     private var recordingStart: Date?
     /// Cached mic-permission result from `bootstrap()`. `preRollEnabled` on
     /// the recorder is only ever flipped on when this is true — enabling it
@@ -48,6 +53,10 @@ public final class AppController: NSObject {
         // very next key press without rewiring.
         hotkey.onPress = { [weak self] in
             guard let self else { return }
+            if self.settings.activationMode == .hold, self.phase == .recording, self.holdLocked {
+                self.endRecording()
+                return
+            }
             if self.settings.activationMode == .toggle, self.phase == .recording {
                 self.endRecording()
             } else {
@@ -57,8 +66,16 @@ public final class AppController: NSObject {
         hotkey.onRelease = { [weak self] in
             guard let self else { return }
             if self.settings.activationMode == .hold {
+                guard !self.holdLocked else { return }
                 self.endRecording()
             }
+        }
+        hotkey.onLockTap = { [weak self] in
+            guard let self, self.settings.activationMode == .hold, self.phase == .recording,
+                  !self.holdLocked else { return }
+            self.holdLocked = true
+            self.pill.showLocked()
+            WisprLog.log("hold-lock engaged")
         }
         pill.position = settings.pillPosition
         recorder.preferredInputDeviceUID = settings.inputDeviceUID
@@ -175,6 +192,7 @@ public final class AppController: NSObject {
             pill.showError("Model still loading…")
             return
         }
+        holdLocked = false
         do {
             try recorder.start()
         } catch {
@@ -196,6 +214,7 @@ public final class AppController: NSObject {
     private func endRecording() {
         WisprLog.log("hotkey RELEASE: phase=\(phase)")
         guard phase == .recording else { return }
+        holdLocked = false
         // Captured now, at hotkey release, rather than inside the delivery
         // Task below: by the time that Task runs, focus may have already
         // moved on to Wispr's own UI (e.g. the pill), which would attribute
@@ -259,6 +278,8 @@ public final class AppController: NSObject {
                     WisprLog.log("directive detected: \(directive.directive.rawValue)")
                 }
                 if !cleanedText.isEmpty && settings.cleanupEnabled {
+                    self.pill.showCleaning()
+                    self.windowModel.activity = .cleaning
                     if let directive {
                         cleanedText = await cleanupEngine.transform(
                             cleanedText, directive: directive.directive, modelID: settings.cleanupModelID)
@@ -269,10 +290,12 @@ public final class AppController: NSObject {
                         // Tone is resolved from the target app's delivery
                         // rule and applies only to normal cleanup — a
                         // directive transform already dictates its own shape.
-                        let tone = settings.deliveryRules.first { $0.bundleID == target?.bundleIdentifier }?.tone
+                        let rule = settings.deliveryRules.first { $0.bundleID == target?.bundleIdentifier }
+                        let tone = rule?.tone
+                        let customToneText = rule?.tone == .custom ? rule?.toneCustomText : nil
                         cleanedText = await cleanupEngine.clean(
                             cleanedText, modelID: settings.cleanupModelID,
-                            hints: hints, vocabulary: vocabulary, tone: tone)
+                            hints: hints, vocabulary: vocabulary, tone: tone, customToneText: customToneText)
                         WisprLog.log("cleanup returned \(cleanedText.count) chars")
                     }
                 }
@@ -314,7 +337,8 @@ public final class AppController: NSObject {
                 self.statusItem.setIcon(.idle)
                 self.windowModel.activity = .ready
                 self.recordHistory(target: target, isSecureTarget: isSecureTarget, rawText: rawText,
-                                   cleanedText: cleanedText, sessionSampleCount: result.sessionSampleCount,
+                                   cleanedText: cleanedText, samples: samples,
+                                   sessionSampleCount: result.sessionSampleCount,
                                    delivered: delivered, appliedCorrections: appliedCorrections)
             } catch {
                 self.pill.showError("Transcription failed")
@@ -335,7 +359,7 @@ public final class AppController: NSObject {
     /// a stale answer for the field that was actually dictated into.
     private func recordHistory(
         target: NSRunningApplication?, isSecureTarget: Bool, rawText: String,
-        cleanedText: String, sessionSampleCount: Int, delivered: Bool,
+        cleanedText: String, samples: [Float], sessionSampleCount: Int, delivered: Bool,
         appliedCorrections: [String]
     ) {
         guard settings.historyEnabled, !isSecureTarget else { return }
@@ -353,7 +377,13 @@ public final class AppController: NSObject {
             wordCount: cleanedText.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count,
             delivered: delivered,
             appliedCorrections: appliedCorrections.isEmpty ? nil : appliedCorrections)
-        Task { await self.historyStore.append(entry) }
+        let retainAudio = settings.retainAudio
+        Task {
+            await self.historyStore.append(entry)
+            if retainAudio {
+                await self.audioArchive.save(samples: samples, id: entry.id)
+            }
+        }
     }
 
     /// Whether the currently focused UI element is a secure text field
@@ -614,21 +644,7 @@ public final class AppController: NSObject {
                 let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
                 WisprLog.log("file import transcribed \(text.count) chars from \(samples.count) samples")
                 let rawText = text
-                var cleanedText = text
-                if !cleanedText.isEmpty && settings.cleanupEnabled {
-                    let hints = settings.learningEnabled ? await correctionStore.topPairs(limit: 20) : []
-                    let vocabulary = Array(await vocabularyStore.all().suffix(50))
-                    cleanedText = await cleanupEngine.clean(
-                        cleanedText, modelID: settings.cleanupModelID, hints: hints, vocabulary: vocabulary)
-                }
-                var appliedCorrections: [String] = []
-                if !cleanedText.isEmpty && settings.learningEnabled {
-                    let pairs = await correctionStore.topPairs(limit: .max)
-                    let (correctedText, applied) = CorrectionApplier.apply(pairs, to: cleanedText)
-                    cleanedText = correctedText
-                    appliedCorrections = applied
-                }
-                cleanedText = FormattingCommands.apply(cleanedText)
+                let (cleanedText, appliedCorrections) = await self.cleanupAndCorrect(rawText)
                 self.phase = .idle
                 self.statusItem.setIcon(.idle)
                 self.windowModel.activity = .ready
@@ -656,6 +672,9 @@ public final class AppController: NSObject {
                 // Awaited (unlike live dictation's fire-and-forget) so
                 // the entry is already there when History opens below.
                 await self.historyStore.append(entry)
+                if self.settings.retainAudio {
+                    await self.audioArchive.save(samples: samples, id: entry.id)
+                }
                 self.showMainWindow(tab: .history)
             } catch {
                 WisprLog.log("audio import FAILED: \(error)")
@@ -664,6 +683,111 @@ public final class AppController: NSObject {
                 } else {
                     self.pill.showError("Couldn't read audio file")
                 }
+                self.phase = .idle
+                self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
+            }
+        }
+    }
+
+    /// Shared tail of the file-import and re-transcribe pipelines: cleanup
+    /// (if enabled) → learned corrections (if enabled) → deterministic
+    /// spoken formatting. Pulled out of `transcribeAudioFile` so
+    /// `retranscribe` doesn't duplicate it — unlike live dictation's
+    /// `endRecording`, neither path has a spoken directive or a per-app tone
+    /// to apply, so this omits both.
+    private func cleanupAndCorrect(_ text: String) async -> (cleanedText: String, appliedCorrections: [String]) {
+        var cleanedText = text
+        if !cleanedText.isEmpty && settings.cleanupEnabled {
+            self.pill.showCleaning()
+            self.windowModel.activity = .cleaning
+            let hints = settings.learningEnabled ? await correctionStore.topPairs(limit: 20) : []
+            let vocabulary = Array(await vocabularyStore.all().suffix(50))
+            cleanedText = await cleanupEngine.clean(
+                cleanedText, modelID: settings.cleanupModelID, hints: hints, vocabulary: vocabulary)
+        }
+        var appliedCorrections: [String] = []
+        if !cleanedText.isEmpty && settings.learningEnabled {
+            let pairs = await correctionStore.topPairs(limit: .max)
+            let (correctedText, applied) = CorrectionApplier.apply(pairs, to: cleanedText)
+            cleanedText = correctedText
+            appliedCorrections = applied
+        }
+        cleanedText = FormattingCommands.apply(cleanedText)
+        return (cleanedText, appliedCorrections)
+    }
+
+    /// Re-runs a past History dictation's archived audio through the same
+    /// transcribe → cleanup → corrections → formatting pipeline as
+    /// `transcribeAudioFile`, appending a new entry rather than mutating the
+    /// original (bundle ID "wispr.retranscribe", delivered=false). Nothing
+    /// is typed anywhere — same as a file import, History is the only
+    /// output channel. Called from the History pane via the main window
+    /// context's `retranscribe` closure.
+    private func retranscribe(entry: HistoryEntry) {
+        guard phase == .idle else {
+            pill.showError("Busy — finish the current dictation first")
+            return
+        }
+        guard modelReady else {
+            pill.showError("Transcription model still loading — try again shortly")
+            return
+        }
+        // Claimed synchronously, before the Task's first `await` — the
+        // same ordering `transcribeAudioFile`/`importAudioFile` use. The
+        // guards above run on the main actor with no intervening
+        // suspension point, so two rapid taps can't both pass them and
+        // race into two concurrent pipelines / duplicate entries.
+        phase = .transcribing
+        statusItem.setIcon(.transcribing)
+        windowModel.activity = .transcribing
+        pill.showTranscribing()
+        Task {
+            guard let url = await self.audioArchive.url(for: entry.id) else {
+                // A brief transcribing flash here is fine — the busy claim
+                // above is what matters; this just unwinds it correctly.
+                self.pill.showError("Audio no longer available")
+                self.phase = .idle
+                self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
+                return
+            }
+            do {
+                // Decode off the main actor — a long recording is real CPU work.
+                let samples = try await Task.detached(priority: .userInitiated) {
+                    try AudioFileImporter.loadSamples(url: url)
+                }.value
+                let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
+                WisprLog.log("retranscribe: \(text.count) chars from \(samples.count) samples")
+                let rawText = text
+                let (cleanedText, appliedCorrections) = await self.cleanupAndCorrect(rawText)
+                self.phase = .idle
+                self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
+                guard !cleanedText.isEmpty else {
+                    self.pill.showError("No speech detected in file")
+                    return
+                }
+                self.pill.hide()
+                let newEntry = HistoryEntry(
+                    id: UUID(),
+                    date: Date(),
+                    appName: entry.appName,
+                    appBundleID: "wispr.retranscribe",
+                    rawText: rawText,
+                    cleanedText: cleanedText,
+                    durationSeconds: entry.durationSeconds,
+                    wordCount: cleanedText.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count,
+                    delivered: false,
+                    appliedCorrections: appliedCorrections.isEmpty ? nil : appliedCorrections)
+                await self.historyStore.append(newEntry)
+                if self.settings.retainAudio {
+                    await self.audioArchive.save(samples: samples, id: newEntry.id)
+                }
+                self.showMainWindow(tab: .history)
+            } catch {
+                WisprLog.log("retranscribe FAILED: \(error)")
+                self.pill.showError("Couldn't read audio file")
                 self.phase = .idle
                 self.statusItem.setIcon(.idle)
                 self.windowModel.activity = .ready
@@ -698,8 +822,9 @@ public final class AppController: NSObject {
             mainWindow = MainWindowController(
                 model: windowModel, settings: settings, modelStore: modelStore,
                 historyStore: historyStore, correctionStore: correctionStore,
-                vocabularyStore: vocabularyStore,
-                actions: makeSettingsActions())
+                vocabularyStore: vocabularyStore, audioArchive: audioArchive,
+                actions: makeSettingsActions(),
+                retranscribe: { [weak self] entry in self?.retranscribe(entry: entry) })
         }
         mainWindow?.show(tab: tab)
     }

@@ -15,12 +15,13 @@ public final class MainWindowController {
 
     public init(model: MainWindowModel, settings: SettingsStore, modelStore: ModelStore,
                 historyStore: HistoryStore, correctionStore: CorrectionStore,
-                vocabularyStore: VocabularyStore, actions: SettingsActions) {
+                vocabularyStore: VocabularyStore, audioArchive: AudioArchiveStore,
+                actions: SettingsActions, retranscribe: @escaping (HistoryEntry) -> Void) {
         self.model = model
         let context = MainWindowContext(
             settings: settings, modelStore: modelStore, historyStore: historyStore,
             correctionStore: correctionStore, vocabularyStore: vocabularyStore,
-            actions: actions)
+            audioArchive: audioArchive, actions: actions, retranscribe: retranscribe)
         makeView = { AnyView(MainWindowView(model: model, context: context)) }
     }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 
 /// The History tab of the unified main window: stat cards, search,
 /// master/detail list, per-entry editing (which feeds correction learning),
@@ -14,6 +15,12 @@ struct HistoryPane: View {
     @State private var selection: UUID?
     @State private var showClearConfirm = false
     @State private var alsoForgetCorrections = false
+    /// Archived-audio URLs for currently loaded entries, resolved
+    /// asynchronously since `AudioArchiveStore` is an actor; a Play/
+    /// Re-transcribe button only appears once an entry's id is a key here.
+    @State private var audioURLs: [UUID: URL] = [:]
+    @State private var player: AVAudioPlayer?
+    @State private var playingID: UUID?
 
     private var summary: HistoryStats.Summary {
         HistoryStats.summarize(entries)
@@ -55,6 +62,9 @@ struct HistoryPane: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .wisprHistoryDidChange)) { _ in
             Task { await refresh() }
+        }
+        .task(id: entries) {
+            await loadAudioURLs()
         }
     }
 
@@ -107,7 +117,11 @@ struct HistoryPane: View {
                         .padding(.top, 24)
                 } else {
                     ForEach(filteredEntries) { entry in
-                        EntryCard(entry: entry, selected: entry.id == selection)
+                        EntryCard(
+                            entry: entry, selected: entry.id == selection,
+                            audioURL: audioURLs[entry.id], isPlaying: playingID == entry.id,
+                            onPlay: { togglePlay(entry) },
+                            onRetranscribe: { context.retranscribe(entry) })
                             .onTapGesture { selection = entry.id }
                             .contextMenu {
                                 Button("Copy") { copy(entry) }
@@ -186,8 +200,44 @@ struct HistoryPane: View {
     private func delete(_ entry: HistoryEntry) {
         Task {
             await context.historyStore.delete(id: entry.id)
+            // HistoryStore stays audio-agnostic — the pane is the call site
+            // that knows a deleted entry's archived audio (if any) should
+            // go with it.
+            await context.audioArchive.delete(id: entry.id)
             if selection == entry.id { selection = nil }
             await refresh()
+        }
+    }
+
+    /// Resolves archived-audio URLs for the currently loaded entries so
+    /// Play/Re-transcribe buttons only render where audio actually exists.
+    private func loadAudioURLs() async {
+        var urls: [UUID: URL] = [:]
+        for entry in entries {
+            if let url = await context.audioArchive.url(for: entry.id) {
+                urls[entry.id] = url
+            }
+        }
+        audioURLs = urls
+    }
+
+    /// No delegate: the pill icon just resets to "play" on the next
+    /// interaction with a different (or the same, after it finishes) row —
+    /// acceptable per the design for this release.
+    private func togglePlay(_ entry: HistoryEntry) {
+        guard let url = audioURLs[entry.id] else { return }
+        if playingID == entry.id {
+            player?.stop()
+            player = nil
+            playingID = nil
+        } else {
+            let newPlayer = try? AVAudioPlayer(contentsOf: url)
+            // Only claim "playing" state if a player was actually
+            // constructed and started — a vanished file must not leave a
+            // stale stop icon on a row that's silently doing nothing.
+            guard let newPlayer, newPlayer.play() else { return }
+            player = newPlayer
+            playingID = entry.id
         }
     }
 
@@ -210,6 +260,7 @@ struct HistoryPane: View {
 
     private func clearHistory(alsoForgetCorrections: Bool) async {
         await context.historyStore.clear()
+        await context.audioArchive.deleteAll()
         if alsoForgetCorrections {
             await context.correctionStore.removeAll()
         }
@@ -223,6 +274,12 @@ struct HistoryPane: View {
 private struct EntryCard: View {
     let entry: HistoryEntry
     let selected: Bool
+    /// Non-nil only when this entry's audio is still archived on disk —
+    /// gates whether the Play/Re-transcribe buttons render at all.
+    let audioURL: URL?
+    let isPlaying: Bool
+    let onPlay: () -> Void
+    let onRetranscribe: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -231,6 +288,18 @@ private struct EntryCard: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(selected ? Theme.lightLavender : Theme.secondaryText)
                 Spacer()
+                if audioURL != nil {
+                    Button(action: onPlay) {
+                        Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selected ? Theme.gold : Theme.secondaryText)
+                    Button(action: onRetranscribe) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selected ? Theme.gold : Theme.secondaryText)
+                }
                 Text(entry.appName)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(selected ? Theme.gold : Theme.secondaryText)

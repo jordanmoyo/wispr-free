@@ -23,6 +23,7 @@ public final class OverlayPill {
         errorGeneration += 1
         state.phase = .recording
         state.levels = []
+        state.locked = false
         show()
     }
 
@@ -30,9 +31,23 @@ public final class OverlayPill {
         state.pushLevel(level)
     }
 
+    /// Marks the current recording as hold-locked (see `HotkeyMonitor.onLockTap`):
+    /// the pill shows a lock glyph and the hotkey can be released without
+    /// stopping the recording.
+    public func showLocked() {
+        state.showLocked()
+    }
+
     public func showTranscribing() {
         errorGeneration += 1
         state.phase = .transcribing
+    }
+
+    /// Distinguishes the AI cleanup/directive-transform step from raw
+    /// transcription: same brand-bars animation, plus a sparkle glyph.
+    public func showCleaning() {
+        errorGeneration += 1
+        state.phase = .cleaning
     }
 
     public func showError(_ message: String) {

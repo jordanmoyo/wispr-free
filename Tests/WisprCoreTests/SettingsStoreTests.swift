@@ -113,6 +113,13 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertTrue(SettingsStore(defaults: defaults).feedbackSounds)
     }
 
+    func testRetainAudioDefaultsToFalseAndPersists() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertFalse(store.retainAudio)
+        store.retainAudio = true
+        XCTAssertTrue(SettingsStore(defaults: defaults).retainAudio)
+    }
+
     func testActivationModeDefaultsToHoldAndPersists() {
         let store = SettingsStore(defaults: defaults)
         XCTAssertEqual(store.activationMode, .hold)

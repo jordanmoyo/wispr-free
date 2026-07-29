@@ -58,10 +58,17 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
   and the on-device LLM reshapes it.
 - **Custom dictionary**: teach Wispr names, brands, and jargon it should
   spell exactly (Settings → Learning).
-- **Per-app tone**: mark an app Casual or Formal and AI cleanup adjusts
-  the register — relaxed in chat, polished in mail.
+- **Per-app tone**: mark an app Casual or Formal — or write your own
+  custom style instruction — and AI cleanup adjusts the register: relaxed
+  in chat, polished in mail.
 - **Audio file transcription**: drop an existing recording (wav, m4a, mp3,
   …) through "Transcribe Audio File…" in the menu and read it in History.
+- **Hold-lock**: mid-dictation, tap ⇧ while holding the push-to-talk key
+  and the recording locks on — release the key, keep talking, press it
+  again to finish. No more finger cramps on long dictations.
+- **Audio with history** (opt-in): keep each dictation's audio so History
+  can replay it or re-transcribe it with a bigger model. Off by default,
+  capped, stored only on your Mac.
 - **Pinned transcription language** (English / French / free auto-detect),
   switchable from the menu, with the active language shown on the
   recording pill.
@@ -126,6 +133,32 @@ open dist
 Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
+
+### 0.6.0
+- **Added:** hold-lock — tap ⇧ while holding the push-to-talk key to lock
+  the recording on; press the key again to finish. The pill shows a lock
+  while engaged.
+- **Added:** custom per-app tone — write a free-text style instruction
+  ("warm, first person, no emoji") next to Casual/Formal in the delivery
+  rules.
+- **Added:** opt-in audio retention (Settings → Privacy) — History gains
+  Play and Re-transcribe for entries with stored audio. Last 100
+  dictations, WAV, local only; turning the toggle off deletes them.
+- **Added:** the pill now shows a distinct "Cleaning" state (with a
+  sparkle) while the AI cleanup runs, so long cleanups aren't mistaken
+  for slow transcription.
+- Wispr remains a single small native Swift binary — no Python runtime,
+  no bundled backend.
+
+### 0.5.2
+- **Fixed:** a selected input device that dies mid-session (e.g. a
+  wireless mic whose transmitter sleeps) no longer wedges dictation —
+  the recorder rebuilds its engine and falls back to the system default.
+- **Fixed:** recordings that are digital silence are refused with a clear
+  message instead of transcribing into hallucinated filler.
+
+### 0.5.1
+- **Added:** "Open Wispr Free" at the top of the menu-bar menu.
 
 ### 0.5.0
 - **Added:** voice-directed formatting — "new paragraph" / "new line"

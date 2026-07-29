@@ -419,6 +419,37 @@ final class CleanupPromptTests: XCTestCase {
         XCTAssertTrue(result.contains("relaxed"))
     }
 
+    // MARK: - system(withHints:vocabulary:tone:customToneText:)
+
+    func testSystemPromptIncludesCustomToneBlock() {
+        let prompt = CleanupPrompt.system(withHints: [], vocabulary: [], tone: .custom,
+                                          customToneText: "warm, first person")
+        XCTAssertTrue(prompt.contains("Adjust the register per the user's stated preference: warm, first person."))
+        XCTAssertTrue(prompt.contains("Keep the meaning and language unchanged."))
+    }
+
+    func testCustomToneWithEmptyTextAddsNoBlock() {
+        let with = CleanupPrompt.system(withHints: [], vocabulary: [], tone: .custom, customToneText: nil)
+        let without = CleanupPrompt.system(withHints: [], vocabulary: [], tone: nil, customToneText: nil)
+        XCTAssertEqual(with, without)
+    }
+
+    /// Defense in depth: `DeliveryRule.sanitizeCustomTone` is the write-path
+    /// sanitizer (applied by the UI), but a hand-edited settings JSON could
+    /// carry unsanitized `customToneText` (multi-line, over-length) straight
+    /// into this call. The prompt layer must re-sanitize rather than trust
+    /// the stored value verbatim, so the invariant (single line, ≤200 chars)
+    /// holds regardless of how the value arrived.
+    func testCustomToneIsSanitizedAgainAtPromptLayer() {
+        let raw = "warm,\nfirst person\n\n" + String(repeating: "a", count: 300)
+        let prompt = CleanupPrompt.system(withHints: [], vocabulary: [], tone: .custom, customToneText: raw)
+        let sanitized = DeliveryRule.sanitizeCustomTone(raw)
+        XCTAssertEqual(sanitized.count, 200)
+        XCTAssertTrue(prompt.contains("Adjust the register per the user's stated preference: \(sanitized)."))
+        XCTAssertFalse(prompt.contains(raw))
+        XCTAssertFalse(prompt.contains("\n\nfirst person"))
+    }
+
     // Real-world regression (2026-07-29): qwen3-4b translated an entirely
     // French transcript into English despite the prompt's NEVER-translate
     // rule; the plausibility guard passed it because translation preserves
