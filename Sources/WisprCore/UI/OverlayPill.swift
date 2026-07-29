@@ -10,6 +10,13 @@ public final class OverlayPill {
     /// each show and when the user changes it in Settings.
     public var position: PillPosition = .bottomCenter
 
+    /// Language reminder under the waveform ("EN", "FR", or "FT" for free
+    /// transcription); set by AppController from settings before each show.
+    public var languageBadge: String {
+        get { state.languageBadge }
+        set { state.languageBadge = newValue }
+    }
+
     public init() {}
 
     public func showRecording() {
@@ -64,7 +71,7 @@ public final class OverlayPill {
             panel = newPanel
         }
         guard let panel else { return }
-        let size = NSSize(width: 200, height: 44)
+        let size = NSSize(width: 200, height: 52)
         panel.setContentSize(size)
         let mouse = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: {

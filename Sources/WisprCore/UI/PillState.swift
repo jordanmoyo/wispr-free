@@ -9,6 +9,9 @@ public final class PillState: ObservableObject {
 
     @Published public var phase: Phase = .recording
     @Published public var levels: [Float] = []
+    /// Two-letter dictation-language reminder shown under the waveform:
+    /// "EN"/"FR" when pinned, "FT" for free (auto-detect) transcription.
+    @Published public var languageBadge: String = "FT"
     /// Envelope-smoothed voice level (0...1) for display: fast attack,
     /// slow release, like an audio meter — avoids flicker from raw RMS.
     @Published public var displayLevel: Double = 0

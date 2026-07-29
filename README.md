@@ -108,6 +108,16 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.4.0
+- **Added:** language selection in the menu-bar menu — English, French, or
+  Free transcription (auto-detect).
+- **Changed:** the menu-bar menu is more compact — model and cleanup-model
+  lists are now submenus showing the current choice at a glance.
+- **Added:** the recording pill shows small initials under the waveform
+  (EN / FR / FT) so you always know the dictation language.
+- **Changed:** the transcribing indicator is now on-brand — the waveform
+  bars ripple in gold on a navy capsule instead of a generic spinner.
+
 ### 0.3.3
 - **Fixed:** clicking the app icon in the Dock, Finder, or Launchpad while
   the app is running now opens the main window instead of doing nothing.

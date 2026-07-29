@@ -186,6 +186,7 @@ public final class AppController: NSObject {
         windowModel.activity = .recording
         playFeedbackSound(start: true)
         pill.position = settings.pillPosition
+        pill.languageBadge = Self.languageBadge(for: settings.pinnedLanguage)
         pill.showRecording()
         recorder.onLevel = { [weak self] level in self?.pill.pushLevel(level) }
     }
@@ -363,10 +364,28 @@ public final class AppController: NSObject {
             menu.addItem(.separator())
         }
 
-        let header = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
+        // Language: Free transcription (auto-detect), English, or French.
+        let languageParent = NSMenuItem(title: "Language: \(languageLabel)",
+                                        action: nil, keyEquivalent: "")
+        let languageMenu = NSMenu()
+        let languageChoices: [(title: String, code: String?)] = [
+            ("Free transcription", nil), ("English", "en"), ("French", "fr"),
+        ]
+        for choice in languageChoices {
+            let item = NSMenuItem(title: choice.title,
+                                  action: #selector(selectLanguage(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.code
+            item.state = settings.pinnedLanguage == choice.code ? .on : .off
+            languageMenu.addItem(item)
+        }
+        languageParent.submenu = languageMenu
+        menu.addItem(languageParent)
 
+        let modelParent = NSMenuItem(title: "Model: \(currentModelName)",
+                                     action: nil, keyEquivalent: "")
+        let modelMenu = NSMenu()
         for model in ModelRegistry.models {
             let installed = modelStore.isInstalled(model)
             let suffix = installed ? "" : "  (↓ \(model.approxSizeMB) MB)"
@@ -376,8 +395,10 @@ public final class AppController: NSObject {
             item.target = self
             item.representedObject = model.id
             item.state = model.id == settings.selectedModelID ? .on : .off
-            menu.addItem(item)
+            modelMenu.addItem(item)
         }
+        modelParent.submenu = modelMenu
+        menu.addItem(modelParent)
 
         menu.addItem(.separator())
         let cleanupToggle = NSMenuItem(title: "AI Cleanup",
@@ -387,10 +408,9 @@ public final class AppController: NSObject {
         cleanupToggle.state = settings.cleanupEnabled ? .on : .off
         menu.addItem(cleanupToggle)
 
-        let cleanupHeader = NSMenuItem(title: "Cleanup Model", action: nil, keyEquivalent: "")
-        cleanupHeader.isEnabled = false
-        menu.addItem(cleanupHeader)
-
+        let cleanupParent = NSMenuItem(title: "Cleanup model: \(currentCleanupModelName)",
+                                       action: nil, keyEquivalent: "")
+        let cleanupMenu = NSMenu()
         for model in CleanupModelRegistry.models {
             let installed = modelStore.isInstalled(model)
             let sizeGB = String(format: "%.1f", Double(model.approxSizeMB) / 1000)
@@ -401,8 +421,10 @@ public final class AppController: NSObject {
             item.target = self
             item.representedObject = model.id
             item.state = model.id == settings.cleanupModelID ? .on : .off
-            menu.addItem(item)
+            cleanupMenu.addItem(item)
         }
+        cleanupParent.submenu = cleanupMenu
+        menu.addItem(cleanupParent)
 
         menu.addItem(.separator())
         let historyItem = NSMenuItem(title: "History…",
@@ -422,6 +444,36 @@ public final class AppController: NSObject {
                               keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
+    }
+
+    /// Initials shown under the recording pill's waveform: the pinned
+    /// language's code ("EN", "FR", …), or "FT" for free transcription
+    /// (auto-detect).
+    static func languageBadge(for pinned: String?) -> String {
+        guard let pinned, !pinned.isEmpty else { return "FT" }
+        return String(pinned.prefix(2)).uppercased()
+    }
+
+    private var languageLabel: String {
+        guard let pinned = settings.pinnedLanguage else { return "Free" }
+        return TranscriptionOptions.languages.first { $0.code == pinned }?.name
+            ?? pinned.uppercased()
+    }
+
+    private var currentModelName: String {
+        ModelRegistry.models.first { $0.id == settings.selectedModelID }?.displayName
+            ?? settings.selectedModelID
+    }
+
+    private var currentCleanupModelName: String {
+        CleanupModelRegistry.models.first { $0.id == settings.cleanupModelID }?.displayName
+            ?? settings.cleanupModelID
+    }
+
+    @objc private func selectLanguage(_ sender: NSMenuItem) {
+        settings.pinnedLanguage = sender.representedObject as? String
+        buildMenu()
+        WisprLog.log("pinned language changed: \(settings.pinnedLanguage ?? "auto")")
     }
 
     @objc private func selectModel(_ sender: NSMenuItem) {
@@ -510,7 +562,8 @@ public final class AppController: NSObject {
                 // Lazy reload on next dictation, same as the menu path.
                 Task { await self.cleanupEngine.unload() }
             },
-            onLanguageChange: { pinned in
+            onLanguageChange: { [weak self] pinned in
+                self?.buildMenu()
                 WisprLog.log("pinned language changed: \(pinned ?? "auto")")
             },
             onPreRollToggle: { [weak self] enabled in
