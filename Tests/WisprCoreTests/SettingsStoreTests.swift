@@ -105,4 +105,44 @@ final class SettingsStoreTests: XCTestCase {
         let store = SettingsStore(defaults: defaults)
         XCTAssertEqual(store.deliveryRules, [])
     }
+
+    func testFeedbackSoundsDefaultsToFalseAndPersists() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertFalse(store.feedbackSounds)
+        store.feedbackSounds = true
+        XCTAssertTrue(SettingsStore(defaults: defaults).feedbackSounds)
+    }
+
+    func testActivationModeDefaultsToHoldAndPersists() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertEqual(store.activationMode, .hold)
+        store.activationMode = .toggle
+        XCTAssertEqual(SettingsStore(defaults: defaults).activationMode, .toggle)
+    }
+
+    func testUnknownActivationModeFailsOpenToHold() {
+        defaults.set("waveHands", forKey: "activationMode")
+        XCTAssertEqual(SettingsStore(defaults: defaults).activationMode, .hold)
+    }
+
+    func testPillPositionDefaultsToBottomCenterAndPersists() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertEqual(store.pillPosition, .bottomCenter)
+        store.pillPosition = .nearCursor
+        XCTAssertEqual(SettingsStore(defaults: defaults).pillPosition, .nearCursor)
+    }
+
+    func testUnknownPillPositionFailsOpenToBottomCenter() {
+        defaults.set("underTheRug", forKey: "pillPosition")
+        XCTAssertEqual(SettingsStore(defaults: defaults).pillPosition, .bottomCenter)
+    }
+
+    func testInputDeviceUIDDefaultsToNilAndPersistsIncludingReset() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertNil(store.inputDeviceUID)
+        store.inputDeviceUID = "BuiltInMicrophoneDevice"
+        XCTAssertEqual(SettingsStore(defaults: defaults).inputDeviceUID, "BuiltInMicrophoneDevice")
+        store.inputDeviceUID = nil
+        XCTAssertNil(SettingsStore(defaults: defaults).inputDeviceUID)
+    }
 }

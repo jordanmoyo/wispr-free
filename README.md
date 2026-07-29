@@ -108,6 +108,21 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.3.0
+- **Fixed:** the Settings window could open invisible (collapsed to a bare
+  titlebar) on recent macOS builds, which also hid the language selection.
+  Settings, History, Learning, and About now live in one redesigned main
+  window that always opens at full size.
+- **Added:** unified main window with sidebar navigation — History,
+  Learning, General, Push to Talk, Microphone, Language & Model, Privacy,
+  and About in one place.
+- **Added:** activation mode — hold to talk (default) or press once to
+  start and again to stop.
+- **Added:** recording pill position — bottom center, top center, or near
+  the text cursor.
+- **Added:** input microphone selection with a live level meter.
+- **Added:** optional feedback sounds when recording starts and stops.
+
 ### 0.2.1
 - **Fixed:** the AI cleanup model could translate non-English dictation to
   English despite being told not to (e.g. an all-French transcript delivered

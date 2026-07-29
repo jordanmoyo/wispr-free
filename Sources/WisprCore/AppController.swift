@@ -27,8 +27,8 @@ public final class AppController: NSObject {
     /// without a granted mic would just fail to start the idle engine, and
     /// the setting still persists so the next bootstrap applies it.
     private var micGranted = false
-    private var settingsWindow: SettingsWindowController?
-    private var historyWindow: HistoryWindowController?
+    private let windowModel = MainWindowModel()
+    private var mainWindow: MainWindowController?
     private var loadEpoch = 0
     private var availableUpdate: String?
     private var updateTimer: Timer?
@@ -40,11 +40,41 @@ public final class AppController: NSObject {
     public func start() {
         buildMenu()
         hotkey.keyCode = settings.hotkeyKeyCode
-        hotkey.onPress = { [weak self] in self?.beginRecording() }
-        hotkey.onRelease = { [weak self] in self?.endRecording() }
+        // In toggle mode the press both starts and stops; the release is
+        // ignored. In hold mode (default), press starts and release stops.
+        // The mode is read per-event so a settings change applies to the
+        // very next key press without rewiring.
+        hotkey.onPress = { [weak self] in
+            guard let self else { return }
+            if self.settings.activationMode == .toggle, self.phase == .recording {
+                self.endRecording()
+            } else {
+                self.beginRecording()
+            }
+        }
+        hotkey.onRelease = { [weak self] in
+            guard let self else { return }
+            if self.settings.activationMode == .hold {
+                self.endRecording()
+            }
+        }
+        pill.position = settings.pillPosition
+        recorder.preferredInputDeviceUID = settings.inputDeviceUID
+        syncWindowModelStatusLine()
         scheduleUpdateChecks()
 
         Task { await self.bootstrap() }
+    }
+
+    private func syncWindowModelStatusLine() {
+        windowModel.hotkeyLabel = HotkeyOptions.option(for: settings.hotkeyKeyCode).shortLabel
+        windowModel.activationVerb = settings.activationMode == .hold ? "hold" : "press"
+    }
+
+    /// Soft feedback chime on recording start/stop, if enabled in Settings.
+    private func playFeedbackSound(start: Bool) {
+        guard settings.feedbackSounds else { return }
+        NSSound(named: start ? "Pop" : "Tink")?.play()
     }
 
     /// CFBundleShortVersionString is nil in `swift test`/dev runs (no bundle
@@ -153,6 +183,9 @@ public final class AppController: NSObject {
         phase = .recording
         recordingStart = Date()
         statusItem.setIcon(.recording)
+        windowModel.activity = .recording
+        playFeedbackSound(start: true)
+        pill.position = settings.pillPosition
         pill.showRecording()
         recorder.onLevel = { [weak self] level in self?.pill.pushLevel(level) }
     }
@@ -167,6 +200,7 @@ public final class AppController: NSObject {
         // dictated into was a secure one.
         let target = NSWorkspace.shared.frontmostApplication
         let isSecureTarget = isSecureTextFieldFocused()
+        playFeedbackSound(start: false)
         let result = recorder.stop()
         let samples = result.samples
         WisprLog.log("recorded \(samples.count) samples, session=\(result.sessionSampleCount) " +
@@ -175,6 +209,7 @@ public final class AppController: NSObject {
         guard DictationGate.shouldTranscribe(sampleCount: result.sessionSampleCount) else {
             phase = .idle
             statusItem.setIcon(.idle)
+            windowModel.activity = .ready
             if result.sessionSampleCount == 0 && heldSeconds >= 1.0 {
                 // Mic delivered nothing despite a real hold (e.g. Bluetooth
                 // headset input that never engages) — never fail silently.
@@ -186,6 +221,7 @@ public final class AppController: NSObject {
         }
         phase = .transcribing
         statusItem.setIcon(.transcribing)
+        windowModel.activity = .transcribing
         pill.showTranscribing()
 
         Task {
@@ -234,6 +270,7 @@ public final class AppController: NSObject {
                 }
                 self.phase = .idle
                 self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
                 self.recordHistory(target: target, isSecureTarget: isSecureTarget, rawText: rawText,
                                    cleanedText: cleanedText, sessionSampleCount: result.sessionSampleCount,
                                    delivered: delivered, appliedCorrections: appliedCorrections)
@@ -242,6 +279,7 @@ public final class AppController: NSObject {
                 WisprLog.log("transcribe FAILED: \(error)")
                 self.phase = .idle
                 self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
             }
         }
     }
@@ -420,74 +458,95 @@ public final class AppController: NSObject {
     }
 
     @objc private func openSettings() {
-        if settingsWindow == nil {
-            let actions = SettingsActions(
-                onHotkeyChange: { [weak self] keyCode in
-                    guard let self else { return }
-                    self.hotkey.keyCode = keyCode
-                    if !self.hotkey.start() {
-                        self.pill.showError("Grant Input Monitoring, then relaunch Wispr Free")
-                        Permissions.openSystemSettings(pane: .inputMonitoring)
-                    }
-                },
-                onModelChange: { [weak self] _ in
-                    guard let self else { return }
-                    self.buildMenu()
-                    Task { await self.loadSelectedModel() }
-                },
-                onCleanupToggle: { [weak self] enabled in
-                    guard let self else { return }
-                    self.buildMenu()
-                    if !enabled {
-                        Task { await self.cleanupEngine.unload() }
-                    }
-                },
-                onCleanupModelChange: { [weak self] _ in
-                    guard let self else { return }
-                    self.buildMenu()
-                    // Lazy reload on next dictation, same as the menu path.
-                    Task { await self.cleanupEngine.unload() }
-                },
-                onLanguageChange: { pinned in
-                    WisprLog.log("pinned language changed: \(pinned ?? "auto")")
-                },
-                onPreRollToggle: { [weak self] enabled in
-                    guard let self else { return }
-                    self.settings.preRollEnabled = enabled
-                    // The setting always persists; the recorder only picks
-                    // it up here when the mic is confirmed granted. If mic
-                    // status is unknown/false, the next bootstrap applies it
-                    // (see `bootstrap()`).
-                    if self.micGranted {
-                        self.recorder.preRollEnabled = enabled
-                    }
-                    WisprLog.log("pre-roll enabled=\(enabled) micGranted=\(self.micGranted)")
-                },
-                onUpdateCheckToggle: { [weak self] enabled in
-                    guard let self else { return }
-                    if enabled {
-                        // Immediate check rather than waiting up to 24h for
-                        // the next scheduled tick.
-                        Task { await self.performUpdateCheck() }
-                    } else {
-                        self.availableUpdate = nil
-                        self.buildMenu()
-                    }
-                },
-                onRulesChange: { [weak self] in
-                    WisprLog.log("delivery rules changed: count=\(self?.settings.deliveryRules.count ?? 0)")
-                })
-            settingsWindow = SettingsWindowController(
-                settings: settings, modelStore: modelStore, actions: actions)
-        }
-        settingsWindow?.show()
+        showMainWindow(tab: .general)
     }
 
     @objc private func openHistory() {
-        if historyWindow == nil {
-            historyWindow = HistoryWindowController(
-                historyStore: historyStore, correctionStore: correctionStore, settings: settings)
+        showMainWindow(tab: .history)
+    }
+
+    private func showMainWindow(tab: MainTab) {
+        if mainWindow == nil {
+            mainWindow = MainWindowController(
+                model: windowModel, settings: settings, modelStore: modelStore,
+                historyStore: historyStore, correctionStore: correctionStore,
+                actions: makeSettingsActions())
         }
-        historyWindow?.show()
+        mainWindow?.show(tab: tab)
+    }
+
+    private func makeSettingsActions() -> SettingsActions {
+        SettingsActions(
+            onHotkeyChange: { [weak self] keyCode in
+                guard let self else { return }
+                self.hotkey.keyCode = keyCode
+                self.syncWindowModelStatusLine()
+                if !self.hotkey.start() {
+                    self.pill.showError("Grant Input Monitoring, then relaunch Wispr Free")
+                    Permissions.openSystemSettings(pane: .inputMonitoring)
+                }
+            },
+            onModelChange: { [weak self] _ in
+                guard let self else { return }
+                self.buildMenu()
+                Task { await self.loadSelectedModel() }
+            },
+            onCleanupToggle: { [weak self] enabled in
+                guard let self else { return }
+                self.buildMenu()
+                if !enabled {
+                    Task { await self.cleanupEngine.unload() }
+                }
+            },
+            onCleanupModelChange: { [weak self] _ in
+                guard let self else { return }
+                self.buildMenu()
+                // Lazy reload on next dictation, same as the menu path.
+                Task { await self.cleanupEngine.unload() }
+            },
+            onLanguageChange: { pinned in
+                WisprLog.log("pinned language changed: \(pinned ?? "auto")")
+            },
+            onPreRollToggle: { [weak self] enabled in
+                guard let self else { return }
+                self.settings.preRollEnabled = enabled
+                // The setting always persists; the recorder only picks
+                // it up here when the mic is confirmed granted. If mic
+                // status is unknown/false, the next bootstrap applies it
+                // (see `bootstrap()`).
+                if self.micGranted {
+                    self.recorder.preRollEnabled = enabled
+                }
+                WisprLog.log("pre-roll enabled=\(enabled) micGranted=\(self.micGranted)")
+            },
+            onUpdateCheckToggle: { [weak self] enabled in
+                guard let self else { return }
+                if enabled {
+                    // Immediate check rather than waiting up to 24h for
+                    // the next scheduled tick.
+                    Task { await self.performUpdateCheck() }
+                } else {
+                    self.availableUpdate = nil
+                    self.buildMenu()
+                }
+            },
+            onRulesChange: { [weak self] in
+                WisprLog.log("delivery rules changed: count=\(self?.settings.deliveryRules.count ?? 0)")
+            },
+            onActivationModeChange: { [weak self] mode in
+                guard let self else { return }
+                self.syncWindowModelStatusLine()
+                WisprLog.log("activation mode: \(mode.rawValue)")
+            },
+            onPillPositionChange: { [weak self] position in
+                guard let self else { return }
+                self.pill.position = position
+                WisprLog.log("pill position: \(position.rawValue)")
+            },
+            onInputDeviceChange: { [weak self] uid in
+                guard let self else { return }
+                self.recorder.preferredInputDeviceUID = uid
+                WisprLog.log("input device: \(uid ?? "system default")")
+            })
     }
 }

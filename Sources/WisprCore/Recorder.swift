@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 
 /// Captures microphone audio via `AVAudioEngine`, gated by push-to-talk.
@@ -51,6 +52,21 @@ public final class Recorder {
     /// Called on the main queue with the RMS level (0...1) of each captured
     /// buffer. Only fires while `mode == .recording`.
     public var onLevel: ((Float) -> Void)?
+
+    /// CoreAudio UID of the input device to capture from, or nil for the
+    /// system default. Setting it while an engine is running (idle pre-roll
+    /// or an active recording) restarts the engine on the new device via the
+    /// same fail-open path as a configuration change; captured samples
+    /// survive the restart. Must be set on the main thread (see the
+    /// class-level concurrency note).
+    public var preferredInputDeviceUID: String? {
+        didSet {
+            guard preferredInputDeviceUID != oldValue else { return }
+            let running = sampleQueue.sync { mode != .stopped }
+            guard running else { return }
+            handleConfigurationChange()
+        }
+    }
 
     /// When enabled, the engine stays running (tap installed, muted render
     /// chain) between dictations so the last 0.5 s of audio before the
@@ -187,6 +203,7 @@ public final class Recorder {
     /// with a tap installed; does not itself set `mode`.
     private func installTapAndStartEngine() throws {
         let input = engine.inputNode
+        Recorder.applyPreferredDevice(uid: preferredInputDeviceUID, to: input)
         // inputFormat is the device's real hardware format; outputFormat can
         // report a generic 44.1 kHz that mismatches (e.g. 16 kHz Bluetooth
         // headsets), which makes the tap silently deliver zero buffers.
@@ -237,6 +254,28 @@ public final class Recorder {
             throw WisprError.recordingFailed
         }
         WisprLog.log("Recorder: engine started, isRunning=\(engine.isRunning)")
+    }
+
+    /// Points the input node's underlying AUHAL at the device with `uid`.
+    /// Fail-open: a missing device (unplugged) or any CoreAudio error leaves
+    /// the system default input in place. Static so `MicLevelMonitor` can
+    /// share the exact same routing for its preview engine.
+    static func applyPreferredDevice(uid: String?, to input: AVAudioInputNode) {
+        guard let uid else { return }
+        guard var deviceID = AudioInputDevices.deviceID(forUID: uid) else {
+            WisprLog.log("Recorder: preferred input device \(uid) not found, using system default")
+            return
+        }
+        guard let audioUnit = input.audioUnit else {
+            WisprLog.log("Recorder: input node has no audio unit, using system default")
+            return
+        }
+        let status = AudioUnitSetProperty(
+            audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+            &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if status != noErr {
+            WisprLog.log("Recorder: setting input device failed (\(status)), using system default")
+        }
     }
 
     /// Must be called on the main thread, without holding `sampleQueue` —

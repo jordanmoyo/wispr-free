@@ -6,6 +6,10 @@ public final class OverlayPill {
     private let state = PillState()
     private var errorGeneration = 0
 
+    /// Where the pill appears; set by AppController from settings before
+    /// each show and when the user changes it in Settings.
+    public var position: PillPosition = .bottomCenter
+
     public init() {}
 
     public func showRecording() {
@@ -60,12 +64,29 @@ public final class OverlayPill {
             panel = newPanel
         }
         guard let panel else { return }
-        panel.setContentSize(NSSize(width: 200, height: 44))
+        let size = NSSize(width: 200, height: 44)
+        panel.setContentSize(size)
+        let mouse = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: {
-            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+            NSMouseInRect(mouse, $0.frame, false)
         }) ?? NSScreen.main {
             let frame = screen.visibleFrame
-            let origin = NSPoint(x: frame.midX - 100, y: frame.minY + 60)
+            let origin: NSPoint
+            switch position {
+            case .bottomCenter:
+                origin = NSPoint(x: frame.midX - size.width / 2, y: frame.minY + 60)
+            case .topCenter:
+                origin = NSPoint(x: frame.midX - size.width / 2,
+                                 y: frame.maxY - size.height - 24)
+            case .nearCursor:
+                // Just below the pointer, clamped so the pill never leaves
+                // the visible screen area.
+                let x = min(max(mouse.x - size.width / 2, frame.minX + 8),
+                            frame.maxX - size.width - 8)
+                let y = min(max(mouse.y - size.height - 28, frame.minY + 8),
+                            frame.maxY - size.height - 8)
+                origin = NSPoint(x: x, y: y)
+            }
             panel.setFrameOrigin(origin)
         }
         panel.orderFrontRegardless()

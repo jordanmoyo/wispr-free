@@ -1,0 +1,54 @@
+import AppKit
+import SwiftUI
+
+/// The single main window (history + learning + settings + about), sized
+/// explicitly per the design. Deliberately NOT sized from
+/// `NSHostingView.fittingSize`: that measurement returned 0×0 for the old
+/// tabbed Settings window on macOS 26, collapsing it to an invisible
+/// titlebar sliver (the "settings don't appear" bug this window replaces).
+@MainActor
+public final class MainWindowController {
+    private var window: NSWindow?
+    private let model: MainWindowModel
+    private let makeView: () -> AnyView
+
+    public init(model: MainWindowModel, settings: SettingsStore, modelStore: ModelStore,
+                historyStore: HistoryStore, correctionStore: CorrectionStore,
+                actions: SettingsActions) {
+        self.model = model
+        let context = MainWindowContext(
+            settings: settings, modelStore: modelStore, historyStore: historyStore,
+            correctionStore: correctionStore, actions: actions)
+        makeView = { AnyView(MainWindowView(model: model, context: context)) }
+    }
+
+    public func show(tab: MainTab) {
+        model.selectedTab = tab
+        let targetWindow: NSWindow
+        if let existing = window {
+            targetWindow = existing
+        } else {
+            let newWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                            .fullSizeContentView],
+                backing: .buffered, defer: false)
+            newWindow.title = "Wispr Free"
+            // The design draws its own chrome: traffic lights float over the
+            // sidebar, no separate titlebar band.
+            newWindow.titlebarAppearsTransparent = true
+            newWindow.titleVisibility = .hidden
+            // The design system is light-palette; pin the window so it looks
+            // as designed regardless of system appearance.
+            newWindow.appearance = NSAppearance(named: .aqua)
+            newWindow.minSize = NSSize(width: 980, height: 640)
+            newWindow.isReleasedWhenClosed = false
+            newWindow.contentView = NSHostingView(rootView: makeView())
+            newWindow.center()
+            window = newWindow
+            targetWindow = newWindow
+        }
+        targetWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}

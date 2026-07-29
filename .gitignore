@@ -6,3 +6,4 @@ dist/
 *.keychain
 *.keychain-db
 .worktrees/
+.playwright-mcp/

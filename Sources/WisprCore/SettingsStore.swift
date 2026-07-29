@@ -1,5 +1,28 @@
 import Foundation
 
+/// How the push-to-talk key starts and stops a dictation.
+public enum ActivationMode: String, CaseIterable {
+    /// Hold the key down to record, release to transcribe.
+    case hold
+    /// Press once to start recording, press again to stop.
+    case toggle
+}
+
+/// Where the recording pill overlay appears on screen.
+public enum PillPosition: String, CaseIterable {
+    case bottomCenter
+    case topCenter
+    case nearCursor
+
+    public var displayName: String {
+        switch self {
+        case .bottomCenter: return "Bottom center"
+        case .topCenter: return "Top center"
+        case .nearCursor: return "Near cursor"
+        }
+    }
+}
+
 public final class SettingsStore {
     private enum Keys {
         static let selectedModelID = "selectedModelID"
@@ -12,6 +35,10 @@ public final class SettingsStore {
         static let learningEnabled = "learningEnabled"
         static let deliveryRules = "deliveryRules"
         static let preRollEnabled = "preRollEnabled"
+        static let feedbackSounds = "feedbackSounds"
+        static let activationMode = "activationMode"
+        static let pillPosition = "pillPosition"
+        static let inputDeviceUID = "inputDeviceUID"
     }
 
     private let defaults: UserDefaults
@@ -79,6 +106,46 @@ public final class SettingsStore {
     public var preRollEnabled: Bool {
         get { defaults.object(forKey: Keys.preRollEnabled) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.preRollEnabled) }
+    }
+
+    /// Whether a soft chime plays when recording starts and stops.
+    public var feedbackSounds: Bool {
+        get { defaults.object(forKey: Keys.feedbackSounds) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.feedbackSounds) }
+    }
+
+    /// Unknown stored values fail open to `.hold` (the historical behavior).
+    public var activationMode: ActivationMode {
+        get {
+            guard let raw = defaults.string(forKey: Keys.activationMode),
+                  let mode = ActivationMode(rawValue: raw) else { return .hold }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.activationMode) }
+    }
+
+    /// Unknown stored values fail open to `.bottomCenter` (the historical
+    /// position).
+    public var pillPosition: PillPosition {
+        get {
+            guard let raw = defaults.string(forKey: Keys.pillPosition),
+                  let position = PillPosition(rawValue: raw) else { return .bottomCenter }
+            return position
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.pillPosition) }
+    }
+
+    /// CoreAudio device UID of the preferred input device, or nil to follow
+    /// the system default input.
+    public var inputDeviceUID: String? {
+        get { defaults.string(forKey: Keys.inputDeviceUID) }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: Keys.inputDeviceUID)
+            } else {
+                defaults.removeObject(forKey: Keys.inputDeviceUID)
+            }
+        }
     }
 
     /// Per-app delivery rules (see `DeliveryRule`). Stored as JSON-encoded
