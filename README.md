@@ -108,6 +108,10 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.3.1
+- **Fixed:** the app now shows a Dock icon (and appears in Cmd-Tab) while
+  the main window is open, returning to menu-bar-only when it closes.
+
 ### 0.3.0
 - **Fixed:** the Settings window could open invisible (collapsed to a bare
   titlebar) on recent macOS builds, which also hid the language selection.

@@ -11,6 +11,7 @@ public final class MainWindowController {
     private var window: NSWindow?
     private let model: MainWindowModel
     private let makeView: () -> AnyView
+    private var closeObserver: NSObjectProtocol?
 
     public init(model: MainWindowModel, settings: SettingsStore, modelStore: ModelStore,
                 historyStore: HistoryStore, correctionStore: CorrectionStore,
@@ -45,9 +46,19 @@ public final class MainWindowController {
             newWindow.isReleasedWhenClosed = false
             newWindow.contentView = NSHostingView(rootView: makeView())
             newWindow.center()
+            closeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: newWindow,
+                queue: .main
+            ) { _ in
+                // Back to menu-bar-only once the window is gone.
+                NSApp.setActivationPolicy(.accessory)
+            }
             window = newWindow
             targetWindow = newWindow
         }
+        // The app is a menu-bar accessory (LSUIElement); give it a Dock icon
+        // and Cmd-Tab presence while the main window is open.
+        NSApp.setActivationPolicy(.regular)
         targetWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
