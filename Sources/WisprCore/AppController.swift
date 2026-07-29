@@ -384,6 +384,13 @@ public final class AppController: NSObject {
         let menu = statusItem.menu
         menu.removeAllItems()
 
+        let openItem = NSMenuItem(title: "Open Wispr Free",
+                                  action: #selector(openMainWindow),
+                                  keyEquivalent: "")
+        openItem.target = self
+        menu.addItem(openItem)
+        menu.addItem(.separator())
+
         if let availableUpdate {
             let updateItem = NSMenuItem(
                 title: "Update available: \(availableUpdate) — View release…",
@@ -657,7 +664,7 @@ public final class AppController: NSObject {
 
     /// Reopen entry point (Dock icon / Finder double-click while running):
     /// bring up the main window on whatever tab it last showed.
-    public func openMainWindow() {
+    @objc public func openMainWindow() {
         showMainWindow(tab: windowModel.selectedTab)
     }
 
