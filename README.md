@@ -1,10 +1,18 @@
 # Wispr Free
 
-Free push-to-talk dictation for macOS. Hold **Fn**, speak, release — your
-words appear in whatever app has focus. No cloud, no account, no
-subscription: Wispr Free never sends your audio or text anywhere. See
-[PRIVACY.md](PRIVACY.md) for the full picture, including the one optional
-network call it makes (a daily update check).
+Push-to-talk dictation that never leaves your Mac. **There is no cloud
+code path** — not disabled, not opt-in: the networking code to send your
+voice or text anywhere simply does not exist. The only network calls are
+one-time model downloads and an optional update check
+([PRIVACY.md](PRIVACY.md) has the full picture).
+
+Speaking is ~3× faster than typing (~150 wpm vs ~40 wpm). Hold a key,
+talk, release — the text lands at your cursor, in whatever app has focus.
+No account, no subscription.
+
+Unlike "cloud-optional" dictation tools, where privacy is a setting you
+have to trust, here it is a property of the code — verifiable by reading
+the source in this repository.
 
 ![Wispr Free in action — hold Fn, speak, release](.github/assets/demo.gif)
 
@@ -44,8 +52,19 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
   apps).
 - **Correction learning**: edits you make to a delivered transcript are
   remembered and applied automatically next time the same word comes up.
-- **Pinned transcription language**, for when auto-detection guesses wrong
-  on a short or ambiguous clip.
+- **Voice-directed formatting**: say "new paragraph" or "new line" (FR:
+  "nouveau paragraphe", "à la ligne") and the break appears literally; end
+  a dictation with "make this a bullet list" or "draft this as an email"
+  and the on-device LLM reshapes it.
+- **Custom dictionary**: teach Wispr names, brands, and jargon it should
+  spell exactly (Settings → Learning).
+- **Per-app tone**: mark an app Casual or Formal and AI cleanup adjusts
+  the register — relaxed in chat, polished in mail.
+- **Audio file transcription**: drop an existing recording (wav, m4a, mp3,
+  …) through "Transcribe Audio File…" in the menu and read it in History.
+- **Pinned transcription language** (English / French / free auto-detect),
+  switchable from the menu, with the active language shown on the
+  recording pill.
 - **Pre-roll audio buffer** (opt-in): keeps a rolling few seconds of audio
   before you hold Fn, so dictation doesn't clip the first word if you start
   speaking right as you press the key.
@@ -107,6 +126,20 @@ open dist
 Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
+
+### 0.5.0
+- **Added:** voice-directed formatting — "new paragraph" / "new line"
+  (FR: "nouveau paragraphe", "nouvelle ligne", "à la ligne") become
+  literal breaks, deterministically, even with AI cleanup off.
+- **Added:** spoken directives — end a dictation with "make this a bullet
+  list" or "draft this as an email" and the on-device LLM rewrites the
+  transcript into that shape (EN + FR phrases).
+- **Added:** audio file transcription — "Transcribe Audio File…" in the
+  menu runs an existing recording through the full pipeline into History.
+- **Added:** custom dictionary (Settings → Learning) — exact spellings for
+  names, brands, and jargon, fed to AI cleanup.
+- **Added:** per-app tone presets — mark an app Casual or Formal in the
+  per-app delivery rules and cleanup adjusts the register.
 
 ### 0.4.0
 - **Added:** language selection in the menu-bar menu — English, French, or

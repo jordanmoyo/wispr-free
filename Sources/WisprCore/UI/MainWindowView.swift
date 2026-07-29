@@ -6,6 +6,7 @@ struct MainWindowContext {
     let modelStore: ModelStore
     let historyStore: HistoryStore
     let correctionStore: CorrectionStore
+    let vocabularyStore: VocabularyStore
     let actions: SettingsActions
 }
 

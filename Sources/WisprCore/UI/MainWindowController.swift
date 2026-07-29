@@ -15,11 +15,12 @@ public final class MainWindowController {
 
     public init(model: MainWindowModel, settings: SettingsStore, modelStore: ModelStore,
                 historyStore: HistoryStore, correctionStore: CorrectionStore,
-                actions: SettingsActions) {
+                vocabularyStore: VocabularyStore, actions: SettingsActions) {
         self.model = model
         let context = MainWindowContext(
             settings: settings, modelStore: modelStore, historyStore: historyStore,
-            correctionStore: correctionStore, actions: actions)
+            correctionStore: correctionStore, vocabularyStore: vocabularyStore,
+            actions: actions)
         makeView = { AnyView(MainWindowView(model: model, context: context)) }
     }
 

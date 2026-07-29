@@ -6,6 +6,8 @@ struct LearningPane: View {
     @State private var corrections: [Correction] = []
     @State private var learningEnabled = true
     @State private var showForgetAllConfirm = false
+    @State private var vocabulary: [String] = []
+    @State private var newTerm = ""
 
     var body: some View {
         PaneScaffold(
@@ -29,6 +31,8 @@ struct LearningPane: View {
                         .opacity(corrections.isEmpty ? 0.5 : 1)
                 }
                 .padding(.top, 14)
+
+                dictionarySection
             }
         }
         .onAppear { Task { await refresh() } }
@@ -103,8 +107,117 @@ struct LearningPane: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline))
     }
 
+    private var dictionarySection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("DICTIONARY")
+                .font(.system(size: 11, weight: .semibold))
+                .kerning(0.5)
+                .foregroundStyle(Theme.secondaryText)
+                .padding(.top, 24)
+                .padding(.bottom, 4)
+            Text("Words Wispr should spell exactly — names, brands, jargon.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondaryText)
+                .padding(.bottom, 10)
+
+            HStack(spacing: 8) {
+                TextField("Add a word…", text: $newTerm)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+                    .onSubmit { addTerm() }
+                Button("Add") { addTerm() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(newTerm.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.bottom, 12)
+
+            if vocabulary.isEmpty {
+                Text("No dictionary words yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+            } else {
+                FlowLayout(spacing: 8) {
+                    ForEach(vocabulary, id: \.self) { term in
+                        termChip(term)
+                    }
+                }
+            }
+        }
+    }
+
+    private func termChip(_ term: String) -> some View {
+        HStack(spacing: 6) {
+            Text(term)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.text)
+            Button {
+                Task {
+                    await context.vocabularyStore.remove(term)
+                    await refresh()
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 8))
+        .background(Capsule().fill(Theme.card))
+        .overlay(Capsule().stroke(Theme.hairline))
+    }
+
+    private func addTerm() {
+        let term = newTerm.trimmingCharacters(in: .whitespaces)
+        guard !term.isEmpty else { return }
+        newTerm = ""
+        Task {
+            await context.vocabularyStore.add(term)
+            await refresh()
+        }
+    }
+
     private func refresh() async {
         corrections = await context.correctionStore.all()
         learningEnabled = context.settings.learningEnabled
+        vocabulary = await context.vocabularyStore.all()
+    }
+}
+
+/// Minimal left-to-right wrapping layout for the dictionary chips —
+/// SwiftUI ships no flow container, and a fixed-column grid would stretch
+/// variable-width chips.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(in: proposal.width ?? .infinity, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(in: bounds.width, subviews: subviews)
+        for (subview, position) in zip(subviews, arrangement.positions) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                proposal: .unspecified)
+        }
+    }
+
+    private func arrange(in width: CGFloat, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return (CGSize(width: maxX, height: y + rowHeight), positions)
     }
 }

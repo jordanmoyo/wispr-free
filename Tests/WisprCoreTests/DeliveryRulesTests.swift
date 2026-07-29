@@ -97,4 +97,40 @@ final class DeliveryRulesTests: XCTestCase {
             "co.zeit.hyper",
         ])
     }
+
+    // MARK: - tone
+
+    /// Backward compatibility: `DeliveryRule` is persisted as JSON on user
+    /// machines. Pre-0.5 JSON has no `tone` key at all; it must still
+    /// decode successfully with `tone == nil`, not throw.
+    func testDeliveryRuleDecodesPreToneJSONWithNilTone() throws {
+        let json = """
+            {"bundleID":"com.example.App","displayName":"App","mode":"insert"}
+            """
+        let rule = try JSONDecoder().decode(DeliveryRule.self, from: Data(json.utf8))
+        XCTAssertEqual(rule.bundleID, "com.example.App")
+        XCTAssertNil(rule.tone)
+    }
+
+    func testDeliveryRuleEncodeDecodeRoundTripsFormalTone() throws {
+        let rule = DeliveryRule(bundleID: target, displayName: "App", mode: .insert, tone: .formal)
+        let data = try JSONEncoder().encode(rule)
+        let decoded = try JSONDecoder().decode(DeliveryRule.self, from: data)
+        XCTAssertEqual(decoded, rule)
+        XCTAssertEqual(decoded.tone, .formal)
+    }
+
+    func testTonePresetDisplayNames() {
+        XCTAssertEqual(TonePreset.casual.displayName, "Casual")
+        XCTAssertEqual(TonePreset.formal.displayName, "Formal")
+    }
+
+    /// Tone is a per-app content preference, orthogonal to the
+    /// delivery-mode safety degradations `effectiveMode` applies — it must
+    /// have no bearing on the resolved mode.
+    func testEffectiveModeIgnoresTone() {
+        let rules = [DeliveryRule(bundleID: target, displayName: "App", mode: .insertAndSend, tone: .casual)]
+        let mode = DeliveryPolicy.effectiveMode(rules: rules, target: target, frontmost: target)
+        XCTAssertEqual(mode, .insertAndSend)
+    }
 }

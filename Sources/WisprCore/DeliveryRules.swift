@@ -10,17 +10,34 @@ public enum DeliveryMode: String, Codable, CaseIterable, Sendable {
     case insertAndSend
 }
 
+/// A per-app register (formality) preference applied to LLM cleanup.
+public enum TonePreset: String, Codable, CaseIterable, Sendable {
+    case casual, formal
+
+    public var displayName: String {
+        switch self {
+        case .casual: return "Casual"
+        case .formal: return "Formal"
+        }
+    }
+}
+
 /// A per-app override of the default delivery behavior.
 public struct DeliveryRule: Codable, Equatable, Identifiable, Sendable {
     public var id: String { bundleID }
     public let bundleID: String
     public let displayName: String
     public var mode: DeliveryMode
+    /// Optional register preference. `nil` (the default, and what
+    /// pre-0.5 persisted JSON without this key decodes to) means no tone
+    /// adjustment is applied.
+    public var tone: TonePreset?
 
-    public init(bundleID: String, displayName: String, mode: DeliveryMode) {
+    public init(bundleID: String, displayName: String, mode: DeliveryMode, tone: TonePreset? = nil) {
         self.bundleID = bundleID
         self.displayName = displayName
         self.mode = mode
+        self.tone = tone
     }
 }
 

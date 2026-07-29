@@ -138,6 +138,14 @@ struct PushToTalkPane: View {
                             .labelsHidden()
                             .frame(width: 190)
                             .onChange(of: rule.mode) { _, _ in persistDeliveryRules() }
+                            Picker("", selection: $rule.tone) {
+                                Text("Default tone").tag(TonePreset?.none)
+                                Text("Casual").tag(TonePreset?.some(.casual))
+                                Text("Formal").tag(TonePreset?.some(.formal))
+                            }
+                            .labelsHidden()
+                            .frame(width: 120)
+                            .onChange(of: rule.tone) { _, _ in persistDeliveryRules() }
                             Button("Remove") {
                                 deliveryRules.removeAll { $0.bundleID == rule.bundleID }
                                 persistDeliveryRules()
@@ -164,7 +172,7 @@ struct PushToTalkPane: View {
                 Spacer()
             }
             .padding(.top, 10)
-            Text("Type and press Return is refused in terminals and skipped if you switch apps while transcribing.")
+            Text("Tone adjusts AI cleanup per app — Casual relaxes the register, Formal polishes it. Type and press Return is refused in terminals and skipped if you switch apps while transcribing.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)
                 .padding(.top, 8)

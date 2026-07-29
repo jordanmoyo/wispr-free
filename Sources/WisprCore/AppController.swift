@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
+import UniformTypeIdentifiers
 
 @MainActor
 public final class AppController: NSObject {
@@ -8,6 +9,7 @@ public final class AppController: NSObject {
     private let modelStore = ModelStore.defaultStore()
     private let historyStore = HistoryStore.defaultStore()
     private let correctionStore = CorrectionStore.defaultStore()
+    private let vocabularyStore = VocabularyStore.defaultStore()
     private let hotkey = HotkeyMonitor()
     private let recorder = Recorder()
     private let pill = OverlayPill()
@@ -234,10 +236,34 @@ public final class AppController: NSObject {
                 // delivered.
                 let rawText = text
                 var cleanedText = text
+                // A trailing spoken directive ("… make this a bullet list")
+                // is stripped either way; with cleanup enabled the remaining
+                // content goes through the LLM transform instead of the
+                // normal cleanup. Fail-open: a failed transform returns its
+                // input, and with cleanup disabled the stripped content just
+                // continues down the normal path.
+                let directive = DirectiveDetector.detect(rawText)
+                if let directive {
+                    cleanedText = directive.content
+                    WisprLog.log("directive detected: \(directive.directive.rawValue)")
+                }
                 if !cleanedText.isEmpty && settings.cleanupEnabled {
-                    let hints = settings.learningEnabled ? await correctionStore.topPairs(limit: 20) : []
-                    cleanedText = await cleanupEngine.clean(cleanedText, modelID: settings.cleanupModelID, hints: hints)
-                    WisprLog.log("cleanup returned \(cleanedText.count) chars")
+                    if let directive {
+                        cleanedText = await cleanupEngine.transform(
+                            cleanedText, directive: directive.directive, modelID: settings.cleanupModelID)
+                        WisprLog.log("transform returned \(cleanedText.count) chars")
+                    } else {
+                        let hints = settings.learningEnabled ? await correctionStore.topPairs(limit: 20) : []
+                        let vocabulary = Array(await vocabularyStore.all().suffix(50))
+                        // Tone is resolved from the target app's delivery
+                        // rule and applies only to normal cleanup — a
+                        // directive transform already dictates its own shape.
+                        let tone = settings.deliveryRules.first { $0.bundleID == target?.bundleIdentifier }?.tone
+                        cleanedText = await cleanupEngine.clean(
+                            cleanedText, modelID: settings.cleanupModelID,
+                            hints: hints, vocabulary: vocabulary, tone: tone)
+                        WisprLog.log("cleanup returned \(cleanedText.count) chars")
+                    }
                 }
                 var appliedCorrections: [String] = []
                 if !cleanedText.isEmpty && settings.learningEnabled {
@@ -247,6 +273,10 @@ public final class AppController: NSObject {
                     appliedCorrections = applied
                     if !applied.isEmpty { WisprLog.log("corrections applied: \(applied.joined(separator: ", "))") }
                 }
+                // Deterministic spoken formatting ("new paragraph" → "\n\n")
+                // runs last, after cleanup and corrections, so it works even
+                // with cleanup disabled. History stores the formatted text.
+                cleanedText = FormattingCommands.apply(cleanedText)
                 var delivered = false
                 var suppressedSecureCopy = false
                 if !cleanedText.isEmpty {
@@ -427,6 +457,12 @@ public final class AppController: NSObject {
         menu.addItem(cleanupParent)
 
         menu.addItem(.separator())
+        let importItem = NSMenuItem(title: "Transcribe Audio File…",
+                                    action: #selector(importAudioFile),
+                                    keyEquivalent: "")
+        importItem.target = self
+        menu.addItem(importItem)
+
         let historyItem = NSMenuItem(title: "History…",
                                      action: #selector(openHistory),
                                      keyEquivalent: "y")
@@ -501,6 +537,112 @@ public final class AppController: NSObject {
         WisprLog.log("cleanup model selected id=\(id)")
     }
 
+    /// Menu entry point for transcribing an existing audio file into
+    /// History. Checked at action time rather than disabling the item on
+    /// state changes: a dictation in flight makes this a logged no-op.
+    @objc private func importAudioFile() {
+        guard phase == .idle else {
+            WisprLog.log("audio import ignored: phase=\(phase)")
+            return
+        }
+        guard modelReady else {
+            pill.showError("Transcription model still loading — try again shortly")
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // The panel is modal, but the global hotkey tap listens in
+        // .commonModes and still fires while it is up — a dictation may
+        // have started (and still be recording) by the time Open is
+        // clicked. Never clobber it: its endRecording guard checks for
+        // .recording, so overwriting phase here would lose the dictation
+        // and leave the recorder running.
+        guard phase == .idle else {
+            WisprLog.log("audio import skipped: dictation started while panel was open")
+            return
+        }
+        transcribeAudioFile(at: url)
+    }
+
+    /// Runs the imported file through the same transcribe → cleanup →
+    /// corrections → formatting pipeline as live dictation, but nothing is
+    /// typed anywhere: the result lands only in History (bundle ID
+    /// "wispr.file-import", delivered=false), which opens when done.
+    private func transcribeAudioFile(at url: URL) {
+        phase = .transcribing
+        statusItem.setIcon(.transcribing)
+        windowModel.activity = .transcribing
+        pill.showTranscribing()
+        Task {
+            do {
+                // Decode off the main actor — a long file is real CPU work.
+                let samples = try await Task.detached(priority: .userInitiated) {
+                    try AudioFileImporter.loadSamples(url: url)
+                }.value
+                let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
+                WisprLog.log("file import transcribed \(text.count) chars from \(samples.count) samples")
+                let rawText = text
+                var cleanedText = text
+                if !cleanedText.isEmpty && settings.cleanupEnabled {
+                    let hints = settings.learningEnabled ? await correctionStore.topPairs(limit: 20) : []
+                    let vocabulary = Array(await vocabularyStore.all().suffix(50))
+                    cleanedText = await cleanupEngine.clean(
+                        cleanedText, modelID: settings.cleanupModelID, hints: hints, vocabulary: vocabulary)
+                }
+                var appliedCorrections: [String] = []
+                if !cleanedText.isEmpty && settings.learningEnabled {
+                    let pairs = await correctionStore.topPairs(limit: .max)
+                    let (correctedText, applied) = CorrectionApplier.apply(pairs, to: cleanedText)
+                    cleanedText = correctedText
+                    appliedCorrections = applied
+                }
+                cleanedText = FormattingCommands.apply(cleanedText)
+                self.phase = .idle
+                self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
+                guard !cleanedText.isEmpty else {
+                    // History is the only output channel for an import —
+                    // an empty transcript must not look like success.
+                    self.pill.showError("No speech detected in file")
+                    return
+                }
+                self.pill.hide()
+                // Recorded regardless of the History toggle: an import is
+                // an explicit request whose only destination is History,
+                // unlike passively captured live dictation.
+                let entry = HistoryEntry(
+                    id: UUID(),
+                    date: Date(),
+                    appName: FileManager.default.displayName(atPath: url.path),
+                    appBundleID: "wispr.file-import",
+                    rawText: rawText,
+                    cleanedText: cleanedText,
+                    durationSeconds: Double(samples.count) / AudioResampler.targetSampleRate,
+                    wordCount: cleanedText.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count,
+                    delivered: false,
+                    appliedCorrections: appliedCorrections.isEmpty ? nil : appliedCorrections)
+                // Awaited (unlike live dictation's fire-and-forget) so
+                // the entry is already there when History opens below.
+                await self.historyStore.append(entry)
+                self.showMainWindow(tab: .history)
+            } catch {
+                WisprLog.log("audio import FAILED: \(error)")
+                if case WisprError.audioFileTooLong = error {
+                    self.pill.showError("Audio file too long (max 30 minutes)")
+                } else {
+                    self.pill.showError("Couldn't read audio file")
+                }
+                self.phase = .idle
+                self.statusItem.setIcon(.idle)
+                self.windowModel.activity = .ready
+            }
+        }
+    }
+
     @objc private func openReleasePage() {
         NSWorkspace.shared.open(URL(string: "https://github.com/jordanmoyo/wispr-free/releases/latest")!)
     }
@@ -528,6 +670,7 @@ public final class AppController: NSObject {
             mainWindow = MainWindowController(
                 model: windowModel, settings: settings, modelStore: modelStore,
                 historyStore: historyStore, correctionStore: correctionStore,
+                vocabularyStore: vocabularyStore,
                 actions: makeSettingsActions())
         }
         mainWindow?.show(tab: tab)
