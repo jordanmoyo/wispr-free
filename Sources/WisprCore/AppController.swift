@@ -222,6 +222,17 @@ public final class AppController: NSObject {
             }
             return
         }
+        let peak = Recorder.peakAmplitude(of: samples)
+        guard peak >= Recorder.silencePeakThreshold else {
+            // The device delivered buffers, but all zeros — transcribing
+            // digital silence makes Whisper hallucinate ("you").
+            WisprLog.log("recording is digital silence (peak=\(peak)) — input device delivering empty buffers")
+            phase = .idle
+            statusItem.setIcon(.idle)
+            windowModel.activity = .ready
+            pill.showError("Mic delivered silence — check input device in Settings")
+            return
+        }
         phase = .transcribing
         statusItem.setIcon(.transcribing)
         windowModel.activity = .transcribing
@@ -590,6 +601,16 @@ public final class AppController: NSObject {
                 let samples = try await Task.detached(priority: .userInitiated) {
                     try AudioFileImporter.loadSamples(url: url)
                 }.value
+                // A silent file would make Whisper hallucinate ("you") —
+                // refuse it with the same message as an empty transcript.
+                guard Recorder.peakAmplitude(of: samples) >= Recorder.silencePeakThreshold else {
+                    WisprLog.log("file import is digital silence, refusing")
+                    self.phase = .idle
+                    self.statusItem.setIcon(.idle)
+                    self.windowModel.activity = .ready
+                    self.pill.showError("No speech detected in file")
+                    return
+                }
                 let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
                 WisprLog.log("file import transcribed \(text.count) chars from \(samples.count) samples")
                 let rawText = text

@@ -39,7 +39,7 @@ public final class Recorder {
         public let sessionSampleCount: Int
     }
 
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var mode: Mode = .stopped
     private var samples: [Float] = []
     private var ring = RingBuffer(capacity: Recorder.ringCapacity)
@@ -95,11 +95,31 @@ public final class Recorder {
     }
 
     public init() {
+        registerConfigObserver()
+    }
+
+    private func registerConfigObserver() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+        }
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in
             DispatchQueue.main.async { self?.handleConfigurationChange() }
         }
+    }
+
+    /// Replaces the engine with a fresh one, re-registering the
+    /// configuration observer on it. Once an engine's input unit gets into
+    /// an invalid-format state (an input device flapping mid-session), no
+    /// re-binding recovers it — `start()` keeps failing with -10875 even on
+    /// a healthy device. Only a new engine rebuilds the AUHAL from scratch.
+    /// Must be called on the main thread with no tap-dependent mode active.
+    private func rebuildEngine() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine = AVAudioEngine()
+        registerConfigObserver()
     }
 
     deinit {
@@ -177,6 +197,20 @@ public final class Recorder {
         Double(samples.count) / AudioResampler.targetSampleRate
     }
 
+    /// Largest absolute sample value — 0 for digital silence.
+    public static func peakAmplitude(of samples: [Float]) -> Float {
+        var peak: Float = 0
+        for s in samples { peak = max(peak, abs(s)) }
+        return peak
+    }
+
+    /// Recordings whose peak falls below this are digital silence (a device
+    /// delivering zero-filled buffers — e.g. a wireless mic whose
+    /// transmitter is off), not a quiet room: a real mic's noise floor
+    /// peaks orders of magnitude higher. Transcribing such audio makes
+    /// Whisper hallucinate filler words ("you"), so it is refused upstream.
+    public static let silencePeakThreshold: Float = 1e-5
+
     // MARK: - Idle-mode (pre-roll) engine lifecycle
 
     /// Must be called on the main thread, without holding `sampleQueue`
@@ -202,8 +236,34 @@ public final class Recorder {
     /// (see the class-level concurrency note). Leaves the engine running
     /// with a tap installed; does not itself set `mode`.
     private func installTapAndStartEngine() throws {
-        let input = engine.inputNode
-        Recorder.applyPreferredDevice(uid: preferredInputDeviceUID, to: input)
+        Recorder.applyPreferredDevice(uid: preferredInputDeviceUID, to: engine.inputNode)
+        do {
+            try tapConnectAndStart(input: engine.inputNode)
+            return
+        } catch {
+            WisprLog.log("Recorder: engine start failed, rebuilding engine")
+        }
+        // A device that fails mid-binding (no live stream, format the render
+        // chain rejects — e.g. a wireless receiver whose transmitter is
+        // asleep) wedges the whole engine; see rebuildEngine(). Try the
+        // selected device once more on a fresh engine, then give it up and
+        // take the system default so dictation keeps working.
+        rebuildEngine()
+        if preferredInputDeviceUID != nil {
+            Recorder.applyPreferredDevice(uid: preferredInputDeviceUID, to: engine.inputNode)
+            do {
+                try tapConnectAndStart(input: engine.inputNode)
+                return
+            } catch {
+                WisprLog.log("Recorder: selected device failed on fresh engine, falling back to system default")
+                rebuildEngine()
+            }
+        }
+        // A fresh engine's input node is bound to the system default.
+        try tapConnectAndStart(input: engine.inputNode)
+    }
+
+    private func tapConnectAndStart(input: AVAudioInputNode) throws {
         // inputFormat is the device's real hardware format; outputFormat can
         // report a generic 44.1 kHz that mismatches (e.g. 16 kHz Bluetooth
         // headsets), which makes the tap silently deliver zero buffers.
@@ -250,6 +310,7 @@ public final class Recorder {
         do {
             try engine.start()
         } catch {
+            WisprLog.log("Recorder: engine start failed: \(error)")
             input.removeTap(onBus: 0)
             throw WisprError.recordingFailed
         }
@@ -274,7 +335,37 @@ public final class Recorder {
             audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
             &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
         if status != noErr {
-            WisprLog.log("Recorder: setting input device failed (\(status)), using system default")
+            // A failed set can leave the AUHAL bound to nothing (input format
+            // reads 0 Hz afterward) — rebind the default explicitly rather
+            // than assume the previous binding survived.
+            WisprLog.log("Recorder: setting input device failed (\(status)), rebinding system default")
+            applySystemDefaultDevice(to: input)
+        }
+    }
+
+    /// Rebinds `input`'s AUHAL to the current system default input device.
+    /// Recovery path for when a preferred-device binding fails or yields a
+    /// dead stream — a device can enumerate with input channels yet expose
+    /// no valid format (wireless receivers whose transmitter is off).
+    static func applySystemDefaultDevice(to input: AVAudioInputNode) {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        guard status == noErr, deviceID != kAudioObjectUnknown,
+              let audioUnit = input.audioUnit else {
+            WisprLog.log("Recorder: could not resolve system default input (\(status))")
+            return
+        }
+        let setStatus = AudioUnitSetProperty(
+            audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+            &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if setStatus != noErr {
+            WisprLog.log("Recorder: rebinding system default failed (\(setStatus))")
         }
     }
 
