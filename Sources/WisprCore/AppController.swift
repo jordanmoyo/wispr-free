@@ -461,6 +461,12 @@ public final class AppController: NSObject {
         showMainWindow(tab: .general)
     }
 
+    /// Reopen entry point (Dock icon / Finder double-click while running):
+    /// bring up the main window on whatever tab it last showed.
+    public func openMainWindow() {
+        showMainWindow(tab: windowModel.selectedTab)
+    }
+
     @objc private func openHistory() {
         showMainWindow(tab: .history)
     }

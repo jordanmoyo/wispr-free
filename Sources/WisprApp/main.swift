@@ -9,6 +9,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
         controller.start()
     }
+
+    /// Clicking the app icon (Dock, Finder, Launchpad) while running sends
+    /// a reopen event; without this the click would do nothing because the
+    /// app is a menu-bar accessory with no windows to restore.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            controller?.openMainWindow()
+        }
+        return true
+    }
 }
 
 let app = NSApplication.shared

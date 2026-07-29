@@ -108,6 +108,10 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.3.3
+- **Fixed:** clicking the app icon in the Dock, Finder, or Launchpad while
+  the app is running now opens the main window instead of doing nothing.
+
 ### 0.3.2
 - **Added:** a small note on the About pane inviting you to star the repo
   on GitHub if you enjoy the app.
