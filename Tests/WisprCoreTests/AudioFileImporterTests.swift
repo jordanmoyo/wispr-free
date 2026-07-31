@@ -70,6 +70,47 @@ final class AudioFileImporterTests: XCTestCase {
         XCTAssertThrowsError(try AudioFileImporter.loadSamples(url: url))
     }
 
+    /// Writes a 16 kHz mono AAC `.m4a` holding exactly `sampleCount` frames, so a
+    /// test can put the decoder on an exact read-chunk boundary.
+    private func writeSineM4A(sampleCount: Int, to url: URL) throws {
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 16_000.0,
+            AVNumberOfChannelsKey: 1,
+        ]
+        let file = try AVAudioFile(forWriting: url, settings: settings)
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                   channels: 1, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                      frameCapacity: AVAudioFrameCount(sampleCount))!
+        buffer.frameLength = AVAudioFrameCount(sampleCount)
+        let data = buffer.floatChannelData![0]
+        for i in 0..<sampleCount {
+            data[i] = sinf(2 * .pi * 440 * Float(i) / 16_000)
+        }
+        try file.write(from: buffer)
+    }
+
+    /// Regression: a file whose decoded length is an exact multiple of the 8192-frame
+    /// read chunk used to throw. Every read filled the buffer completely, so the
+    /// short-read "this was the last chunk" heuristic never fired, the loop issued one
+    /// more `read()` past true end-of-file, and AVFoundation threw instead of returning
+    /// zero frames. Verified against 8192, 16384, 24576, 196608, 204800 and 212992;
+    /// totals ten samples either side of those decoded fine.
+    func testDecodesLengthThatIsExactMultipleOfReadChunk() throws {
+        for sampleCount in [8_192, 16_384, 204_800] {
+            let url = tempDir.appendingPathComponent("boundary-\(sampleCount).m4a")
+            try writeSineM4A(sampleCount: sampleCount, to: url)
+
+            let samples = try AudioFileImporter.loadSamples(url: url)
+
+            XCTAssertGreaterThan(samples.count, sampleCount - 4_000,
+                                 "lost audio decoding \(sampleCount) frames")
+            XCTAssertLessThan(samples.count, sampleCount + 4_000,
+                              "decoded past the end of \(sampleCount) frames")
+        }
+    }
+
     func testMaxSamplesConstant() {
         XCTAssertEqual(AudioFileImporter.maxSamples, 28_800_000)
     }

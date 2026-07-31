@@ -12,6 +12,7 @@ let package = Package(
         // Relaxed to <1.2.0: WhisperKit pins swift-transformers 1.1.x, and this
         // dependency only exists so the Tokenizers module is importable.
         .package(url: "https://github.com/huggingface/swift-transformers", .upToNextMinor(from: "1.1.6")),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", .upToNextMinor(from: "0.15.5")),
     ],
     targets: [
         .target(
@@ -24,6 +25,7 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/WisprCore"
         ),

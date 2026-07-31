@@ -38,6 +38,9 @@ public struct SettingsActions {
     public var onActivationModeChange: (ActivationMode) -> Void
     public var onPillPositionChange: (PillPosition) -> Void
     public var onInputDeviceChange: (String?) -> Void
+    /// Applied immediately so toggling detection off/on takes effect without
+    /// relaunching — see `AppController.applyMeetingAutoDetect`.
+    public var onMeetingAutoDetectToggle: (Bool) -> Void
 
     public init(
         onHotkeyChange: @escaping (Int64) -> Void = { _ in },
@@ -50,7 +53,8 @@ public struct SettingsActions {
         onRulesChange: @escaping () -> Void = {},
         onActivationModeChange: @escaping (ActivationMode) -> Void = { _ in },
         onPillPositionChange: @escaping (PillPosition) -> Void = { _ in },
-        onInputDeviceChange: @escaping (String?) -> Void = { _ in }
+        onInputDeviceChange: @escaping (String?) -> Void = { _ in },
+        onMeetingAutoDetectToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.onHotkeyChange = onHotkeyChange
         self.onModelChange = onModelChange
@@ -63,6 +67,7 @@ public struct SettingsActions {
         self.onActivationModeChange = onActivationModeChange
         self.onPillPositionChange = onPillPositionChange
         self.onInputDeviceChange = onInputDeviceChange
+        self.onMeetingAutoDetectToggle = onMeetingAutoDetectToggle
     }
 }
 

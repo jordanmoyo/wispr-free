@@ -16,6 +16,14 @@ public enum AudioResampler {
             return Array(UnsafeBufferPointer(start: data[0], count: Int(buffer.frameLength)))
         }
 
+        // The manual downmix below reads `floatChannelData`, which is nil for any
+        // buffer that is not Float32 — ScreenCaptureKit can hand back Int16, and
+        // force-unwrapping there would crash. Let AVAudioConverter do the format,
+        // channel and rate conversion in one pass instead.
+        guard buffer.floatChannelData != nil else {
+            return convert(buffer, to: targetFormat)
+        }
+
         // If input is stereo and needs downmixing, create intermediate mono buffer first
         let monoInput: AVAudioPCMBuffer
         if buffer.format.channelCount > 1 {
@@ -60,11 +68,19 @@ public enum AudioResampler {
             return Array(UnsafeBufferPointer(start: data[0], count: Int(monoInput.frameLength)))
         }
 
-        guard let converter = AVAudioConverter(from: monoInput.format, to: targetFormat) else {
+        return convert(monoInput, to: targetFormat)
+    }
+
+    /// Runs one buffer through `AVAudioConverter` into the target format. Handles
+    /// sample-rate, channel-count and sample-format conversion together, so it is
+    /// also the safe path for input the manual downmix above cannot touch.
+    private static func convert(_ input: AVAudioPCMBuffer,
+                                to targetFormat: AVAudioFormat) -> [Float] {
+        guard let converter = AVAudioConverter(from: input.format, to: targetFormat) else {
             return []
         }
-        let ratio = targetSampleRate / monoInput.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(monoInput.frameLength) * ratio) + 64
+        let ratio = targetSampleRate / input.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 64
         guard let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
             return []
         }
@@ -77,7 +93,7 @@ public enum AudioResampler {
             }
             consumed = true
             status.pointee = .haveData
-            return monoInput
+            return input
         }
         // Check for conversion errors
         if status == .error || convertError != nil {

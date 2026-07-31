@@ -43,4 +43,35 @@ public actor Transcriber {
         let raw = results.map(\.text).joined(separator: " ")
         return TranscriptCleaner.clean(raw)
     }
+
+    /// Timestamped transcription for Meetings. Unlike `transcribe(samples:)`,
+    /// this keeps WhisperKit's per-segment boundaries instead of collapsing
+    /// everything into one string, because the merger needs times to attribute
+    /// speakers.
+    ///
+    /// `TranscriptCleaner.clean` is applied per segment so each one gets the
+    /// same artifact stripping the dictation path gets, plus a filter for the
+    /// phrases Whisper emits over silence — see
+    /// `TranscriptCleaner.isSilenceHallucination` for why that one is
+    /// meetings-only.
+    public func transcribeSegments(samples: [Float], language: String? = nil,
+                                   progress: (@Sendable (Double) -> Void)? = nil) async throws
+        -> [MeetingTranscriptSegment] {
+        guard let pipeline else { throw WisprError.modelNotLoaded }
+        let options = TranscriptionOptions.build(pinned: language)
+        let results = try await pipeline.transcribe(audioArray: samples, decodeOptions: options)
+        progress?(1.0)
+        return results.flatMap(\.segments).compactMap { segment in
+            let text = TranscriptCleaner.clean(segment.text)
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !TranscriptCleaner.isSilenceHallucination(text) else { return nil }
+            return MeetingTranscriptSegment(
+                speaker: .others,
+                start: TimeInterval(segment.start),
+                end: TimeInterval(segment.end),
+                text: text)
+        }
+    }
 }
+
+extension Transcriber: MeetingSegmentTranscribing {}

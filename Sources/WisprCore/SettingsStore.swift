@@ -40,6 +40,9 @@ public final class SettingsStore {
         static let pillPosition = "pillPosition"
         static let inputDeviceUID = "inputDeviceUID"
         static let retainAudio = "retainAudio"
+        static let meetingRetentionGB = "meetingRetentionGB"
+        static let meetingRetentionDays = "meetingRetentionDays"
+        static let meetingAutoDetect = "meetingAutoDetect"
     }
 
     private let defaults: UserDefaults
@@ -155,6 +158,45 @@ public final class SettingsStore {
                 defaults.removeObject(forKey: Keys.inputDeviceUID)
             }
         }
+    }
+
+    /// How many gigabytes of meeting audio to keep before the oldest tracks
+    /// are pruned (see `MeetingAudioStore.enforceRetention`). Clamped to
+    /// 1...100 on BOTH read and write, so a stray value can't silently
+    /// disable retention (0 or negative) or let the store grow unbounded —
+    /// clamping only on write left a value already sitting out-of-range in
+    /// `UserDefaults` (a corrupted plist, a stray manual edit, a future
+    /// build that once wrote a wider range) unclamped forever, since the
+    /// getter only supplies `5` when the key is entirely ABSENT, not when
+    /// it's present but out of range.
+    public var meetingRetentionGB: Int {
+        get { min(100, max(1, (defaults.object(forKey: Keys.meetingRetentionGB) as? Int) ?? 5)) }
+        set { defaults.set(min(100, max(1, newValue)), forKey: Keys.meetingRetentionGB) }
+    }
+
+    /// `meetingRetentionGB` converted to bytes for `MeetingAudioStore`, which
+    /// works in bytes, not gigabytes.
+    public var meetingRetentionBytes: Int64 {
+        Int64(meetingRetentionGB) * 1024 * 1024 * 1024
+    }
+
+    /// How many days of meeting audio to keep before the oldest tracks are
+    /// pruned. Clamped to 1...3650 on BOTH read and write, for the same
+    /// reason as `meetingRetentionGB`: a value already out of range in
+    /// `UserDefaults` must not silently reach `MeetingAudioStore
+    /// .enforceRetention` — a stored `0`, in particular, would push its
+    /// cutoff to "now" and evict every meeting's audio outright.
+    public var meetingRetentionDays: Int {
+        get { min(3_650, max(1, (defaults.object(forKey: Keys.meetingRetentionDays) as? Int) ?? 90)) }
+        set { defaults.set(min(3_650, max(1, newValue)), forKey: Keys.meetingRetentionDays) }
+    }
+
+    /// Whether `CallAppMonitor` polls for calls in progress and offers to
+    /// record them. Default on; the offer itself still requires an explicit
+    /// tap to start recording, so this only controls the passive polling.
+    public var meetingAutoDetect: Bool {
+        get { defaults.object(forKey: Keys.meetingAutoDetect) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.meetingAutoDetect) }
     }
 
     /// Per-app delivery rules (see `DeliveryRule`). Stored as JSON-encoded

@@ -8,10 +8,15 @@ struct MainWindowContext {
     let correctionStore: CorrectionStore
     let vocabularyStore: VocabularyStore
     let audioArchive: AudioArchiveStore
+    let meetingStore: MeetingStore
+    let meetingAudioStore: MeetingAudioStore
     let actions: SettingsActions
     /// History pane hook: re-run a past dictation's archived audio through
     /// the transcription pipeline again, appending a new entry.
     let retranscribe: (HistoryEntry) -> Void
+    /// The seam into `AppController` for the Meetings pane: start/stop a
+    /// recording, kick off reprocessing or notes enhancement, delete.
+    let meetingsCoordinator: any MeetingsCoordinating
 }
 
 /// The unified main window: sidebar navigation (Dictation / Settings /
@@ -34,6 +39,7 @@ struct MainWindowView: View {
     private var content: some View {
         switch model.selectedTab {
         case .history: HistoryPane(context: context)
+        case .meetings: MeetingsPane(context: context)
         case .learning: LearningPane(context: context)
         case .general: GeneralPane(context: context)
         case .pushToTalk: PushToTalkPane(context: context, model: model)

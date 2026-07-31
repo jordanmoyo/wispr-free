@@ -11,15 +11,24 @@ public final class AppController: NSObject {
     private let correctionStore = CorrectionStore.defaultStore()
     private let vocabularyStore = VocabularyStore.defaultStore()
     private let audioArchive = AudioArchiveStore.defaultStore()
+    private let meetingStore = MeetingStore.defaultStore()
+    private let meetingAudioStore = MeetingAudioStore.defaultStore()
     private let hotkey = HotkeyMonitor()
     private let recorder = Recorder()
     private let pill = OverlayPill()
     private let statusItem = StatusItemController()
     private lazy var transcriber = Transcriber(modelStore: modelStore)
-    private lazy var cleanupEngine = CleanupEngine(
-        backend: MLXCleanupBackend(cacheDirectory: modelStore.cleanupCacheDirectory))
+    /// Hoisted out of `cleanupEngine`'s initializer so `CleanupBackendGenerator`
+    /// (the meeting summarizer/enhancer's text backend) can share the exact
+    /// same `MLXCleanupBackend` instance rather than constructing a second
+    /// one — the backend owns a single loaded MLX model, and two instances
+    /// would double the memory footprint and load time for no benefit.
+    private lazy var cleanupBackend = MLXCleanupBackend(cacheDirectory: modelStore.cleanupCacheDirectory)
+    private lazy var cleanupEngine = CleanupEngine(backend: cleanupBackend)
     private lazy var updateChecker = UpdateChecker(
         transport: GitHubUpdateTransport(), currentVersion: currentAppVersion())
+    private let meetingDiarizer = FluidAudioDiarizer()
+    private let callMonitor = CallAppMonitor()
 
     private enum Phase { case idle, recording, transcribing }
     private var phase: Phase = .idle
@@ -39,6 +48,51 @@ public final class AppController: NSObject {
     private var loadEpoch = 0
     private var availableUpdate: String?
     private var updateTimer: Timer?
+
+    // MARK: - Meetings
+
+    /// Owns all meeting-recording state and logic (the recorder, the
+    /// setup/stop-coalescing flags, the pipeline-run chain, the registered
+    /// `MeetingsViewModel`) — extracted out of `AppController` specifically
+    /// so it can be constructed on its own in a test, with fakes substituted
+    /// for the recorder and the pipeline. See `MeetingsCoordinatorImpl`'s
+    /// doc comment for why that extraction was necessary (in short:
+    /// `StatusItemController.init()` has a real, visible side effect, which
+    /// rules out constructing a full `AppController` in a test).
+    ///
+    /// `lazy`, not a plain stored property, because its factory closures
+    /// below capture `self` — only valid once `self` is fully initialized.
+    private lazy var meetingsCoordinator = MeetingsCoordinatorImpl(
+        meetingStore: meetingStore,
+        meetingAudioStore: meetingAudioStore,
+        settings: settings,
+        meetingDiarizer: meetingDiarizer,
+        recorderFactory: { [self] id, micURL, systemURL in
+            // Captured strongly (`[self]`), not weakly: `meetingsCoordinator`
+            // is an AppController-owned property with the same lifetime as
+            // AppController itself — a long-lived singleton, constructed
+            // once in `main.swift`, alive until process exit. A cycle here
+            // never leaks, unlike the `[weak self]` closures handed to
+            // OTHER long-lived collaborators (`hotkey`/`pill`) elsewhere in
+            // this file, which use `weak` as defensive style since those
+            // objects don't themselves hold a reference back to this one.
+            MeetingRecorder(meetingID: id,
+                             micSource: MeetingMicSource(deviceUID: self.settings.inputDeviceUID),
+                             systemSource: SystemAudioSource(),
+                             micURL: micURL, systemURL: systemURL)
+        },
+        pipelineFactory: { [self] diarizer in self.makePipeline(diarizer: diarizer) },
+        dictationPhaseIdle: { [weak self] in self?.phase == .idle },
+        showError: { [weak self] message in self?.pill.showError(message) },
+        setStatusIcon: { [weak self] icon in self?.statusItem.setIcon(icon) },
+        rebuildMenu: { [weak self] in self?.buildMenu() },
+        showMeetingsWindow: { [weak self] in self?.showMainWindow(tab: .meetings) })
+
+    /// Read by `beginRecording()` to refuse dictation while a meeting is
+    /// recording, being set up, or being torn down, and evaluated by
+    /// `meetingStartRefusal` to refuse a second meeting while one is already
+    /// active.
+    var meetingRecordingActive: Bool { meetingsCoordinator.meetingRecordingActive }
 
     public override init() {
         super.init()
@@ -82,7 +136,40 @@ public final class AppController: NSObject {
         syncWindowModelStatusLine()
         scheduleUpdateChecks()
 
+        applyMeetingAutoDetect(settings.meetingAutoDetect)
+
         Task { await self.bootstrap() }
+    }
+
+    /// Starts or stops `callMonitor` to match `meetingAutoDetect`. Called
+    /// once from `start()` at launch, and again from
+    /// `SettingsActions.onMeetingAutoDetectToggle` whenever the Privacy pane
+    /// toggle changes — `CallAppMonitor.start()`/`stop()` are both
+    /// idempotent, so applying the same value twice is harmless, and this is
+    /// what makes the toggle take effect immediately instead of requiring a
+    /// relaunch.
+    private func applyMeetingAutoDetect(_ enabled: Bool) {
+        guard enabled else {
+            callMonitor.stop()
+            return
+        }
+        callMonitor.isRecordingProvider = { [weak self] in
+            guard let self else { return true }
+            return self.meetingRecordingActive || self.phase != .idle
+        }
+        callMonitor.onDetected = { [weak self] app in
+            guard let self else { return }
+            self.notifyCallDetected(app)
+        }
+        callMonitor.start()
+    }
+
+    /// Offers to record a detected call. Deliberately passive: it tells the
+    /// user Wispr noticed and how to start, and never begins recording on
+    /// its own — recording a call without an explicit press would be the
+    /// wrong default.
+    private func notifyCallDetected(_ app: CallApp) {
+        pill.showError("\(app.name) call detected — Record Meeting from the menu bar")
     }
 
     private func syncWindowModelStatusLine() {
@@ -125,6 +212,7 @@ public final class AppController: NSObject {
         }
 
         await loadSelectedModel()
+        await meetingsCoordinator.reconcileAtLaunch()
 
         // Fire-and-forget: an update check must never delay or block bootstrap.
         Task { await self.performUpdateCheck() }
@@ -187,6 +275,10 @@ public final class AppController: NSObject {
 
     private func beginRecording() {
         WisprLog.log("hotkey PRESS: phase=\(phase) modelReady=\(modelReady)")
+        guard !meetingRecordingActive else {
+            pill.showError(Self.dictationBlockedMessage())
+            return
+        }
         guard phase == .idle else { return }
         guard modelReady else {
             pill.showError("Model still loading…")
@@ -432,6 +524,19 @@ public final class AppController: NSObject {
         menu.addItem(openItem)
         menu.addItem(.separator())
 
+        let meetingsItem = NSMenuItem(title: "Meetings…",
+                                      action: #selector(openMeetings),
+                                      keyEquivalent: "")
+        meetingsItem.target = self
+        menu.addItem(meetingsItem)
+
+        let recordItem = NSMenuItem(
+            title: meetingRecordingActive ? "Stop Meeting" : "Record Meeting",
+            action: #selector(toggleMeetingRecording), keyEquivalent: "")
+        recordItem.target = self
+        menu.addItem(recordItem)
+        menu.addItem(.separator())
+
         if let availableUpdate {
             let updateItem = NSMenuItem(
                 title: "Update available: \(availableUpdate) — View release…",
@@ -589,6 +694,15 @@ public final class AppController: NSObject {
     /// History. Checked at action time rather than disabling the item on
     /// state changes: a dictation in flight makes this a logged no-op.
     @objc private func importAudioFile() {
+        // Same exclusion the hotkey path applies. Not just tidiness: this
+        // path sets the menu-bar icon to `.transcribing` and then, on every
+        // exit, to `.idle` — which silently erased the `.recording` icon of a
+        // meeting still in progress. Nothing re-asserts it, so the app went
+        // on capturing mic and system audio behind an idle indicator.
+        guard !meetingRecordingActive else {
+            pill.showError(Self.dictationBlockedMessage())
+            return
+        }
         guard phase == .idle else {
             WisprLog.log("audio import ignored: phase=\(phase)")
             return
@@ -725,6 +839,12 @@ public final class AppController: NSObject {
     /// output channel. Called from the History pane via the main window
     /// context's `retranscribe` closure.
     private func retranscribe(entry: HistoryEntry) {
+        // See `importAudioFile` — this path drives the same status icon and
+        // would leave a live meeting's indicator showing idle.
+        guard !meetingRecordingActive else {
+            pill.showError(Self.dictationBlockedMessage())
+            return
+        }
         guard phase == .idle else {
             pill.showError("Busy — finish the current dictation first")
             return
@@ -795,6 +915,19 @@ public final class AppController: NSObject {
         }
     }
 
+    @objc private func openMeetings() {
+        showMainWindow(tab: .meetings)
+    }
+
+    /// Thin wrapper: all the actual routing (registered pane vs. direct
+    /// coordinator call + pill fallback) lives on `MeetingsCoordinatorImpl
+    /// .toggleRecording()` now — see its doc comment. Kept here only because
+    /// `@objc` selectors require an `NSObject` target, and
+    /// `MeetingsCoordinatorImpl` need not be one.
+    @objc private func toggleMeetingRecording() {
+        Task { await self.meetingsCoordinator.toggleRecording() }
+    }
+
     @objc private func openReleasePage() {
         NSWorkspace.shared.open(URL(string: "https://github.com/jordanmoyo/wispr-free/releases/latest")!)
     }
@@ -823,8 +956,10 @@ public final class AppController: NSObject {
                 model: windowModel, settings: settings, modelStore: modelStore,
                 historyStore: historyStore, correctionStore: correctionStore,
                 vocabularyStore: vocabularyStore, audioArchive: audioArchive,
+                meetingStore: meetingStore, meetingAudioStore: meetingAudioStore,
                 actions: makeSettingsActions(),
-                retranscribe: { [weak self] entry in self?.retranscribe(entry: entry) })
+                retranscribe: { [weak self] entry in self?.retranscribe(entry: entry) },
+                meetingsCoordinator: meetingsCoordinator)
         }
         mainWindow?.show(tab: tab)
     }
@@ -902,6 +1037,140 @@ public final class AppController: NSObject {
                 guard let self else { return }
                 self.recorder.preferredInputDeviceUID = uid
                 WisprLog.log("input device: \(uid ?? "system default")")
+            },
+            onMeetingAutoDetectToggle: { [weak self] enabled in
+                guard let self else { return }
+                self.applyMeetingAutoDetect(enabled)
+                WisprLog.log("meeting auto-detect: \(enabled)")
             })
+    }
+}
+
+// MARK: - Meetings decision helpers
+
+extension AppController {
+    /// The reason a meeting cannot start, or nil if it can. Ordered so the
+    /// cheapest fix is reported first. An already-active meeting is NOT a
+    /// refusal — the caller returns the running meeting's id instead.
+    /// `nonisolated` (pure function of its arguments, no actor state) so
+    /// tests can call it synchronously without hopping onto the main actor.
+    nonisolated static func meetingStartRefusal(dictationPhaseIdle: Bool,
+                                                meetingActive: Bool,
+                                                micGranted: Bool,
+                                                screenRecordingGranted: Bool) -> MeetingStartFailure? {
+        if !dictationPhaseIdle { return .dictationInProgress }
+        if meetingActive { return nil }
+        if !micGranted { return .micDenied }
+        if !screenRecordingGranted { return .screenRecordingDenied }
+        return nil
+    }
+
+    nonisolated static func dictationBlockedMessage() -> String {
+        "Recording a meeting — dictation is paused"
+    }
+
+    /// The outcome of racing an async operation against a fixed timeout.
+    enum TimeoutOutcome<T: Sendable>: Sendable {
+        case completed(T)
+        case timedOut
+    }
+
+    /// Races `operation` against `seconds`. Exists because a call into
+    /// ScreenCaptureKit (`SCShareableContent`/`SCStream`, reached via
+    /// `SystemAudioSource.permissionGranted()`/`MeetingRecorder.start()`)
+    /// can block indefinitely if `replayd` is wedged — without a bound
+    /// here, that single stuck call would hold `meetingSetupInProgress`/
+    /// `startMeetingTask` open forever, permanently refusing dictation and
+    /// coalescing every future "Record Meeting" tap into the dead attempt,
+    /// with no escape short of quitting the app.
+    ///
+    /// Deliberately NOT built on `withTaskGroup`: a group implicitly awaits
+    /// every child task before it returns, even one that lost the race and
+    /// was merely asked (via `cancelAll()`) to cancel cooperatively. None of
+    /// the calls this wraps check `Task.isCancelled`, so a group-based race
+    /// would still block THIS function on the very call it exists to bound
+    /// — defeating the whole point (caught by a test hanging during this
+    /// task's implementation, not by inspection). Instead, `operation` and
+    /// the timer run as two fully independent, unstructured tasks racing to
+    /// resume one continuation exactly once (`TimeoutResumeBox`); the loser
+    /// is simply abandoned and keeps running in the background, unawaited.
+    /// A caller whose `operation` creates a resource (a running `SCStream`,
+    /// say) is responsible for tearing that down itself if it ever resolves
+    /// late; a pure probe like `permissionGranted()` has nothing to clean up
+    /// and can simply be treated as failed. See `startRecorderBounded` for
+    /// the resource-owning case.
+    nonisolated static func withTimeout<T: Sendable>(
+        seconds: TimeInterval, operation: @escaping @Sendable () async -> T
+    ) async -> TimeoutOutcome<T> {
+        await withCheckedContinuation {
+            (continuation: CheckedContinuation<TimeoutOutcome<T>, Never>) in
+            let box = TimeoutResumeBox(continuation: continuation)
+            Task {
+                let value = await operation()
+                await box.resolve(.completed(value))
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+                await box.resolve(.timedOut)
+            }
+        }
+    }
+}
+
+// MARK: - MeetingsCoordinating (moved to MeetingsCoordinatorImpl)
+//
+// `startMeeting`/`stopMeeting`/`finishStopping`/`reprocess`/`enhanceNotes`/
+// `deleteMeeting`/`register(model:)`, and the `deleteMeetingSafely` helper
+// this replaced, all now live on `MeetingsCoordinatorImpl` — see its doc
+// comment for why (a review's "add the injectable recorder/coordinator
+// seam" instruction, since `AppController` itself cannot safely be
+// constructed in a test).
+
+
+// MARK: - Meetings private helpers
+
+extension AppController {
+    /// Builds a pipeline sharing the app's existing MLX backend and Whisper
+    /// pipeline. Diarization degrades to `NullDiarizer` when the models
+    /// cannot be loaded, so a meeting is never lost to a missing download.
+    private func makePipeline(diarizer: (any MeetingDiarizing)? = nil) -> MeetingPipeline {
+        MeetingPipeline(
+            store: meetingStore,
+            audioStore: meetingAudioStore,
+            transcriber: transcriber,
+            diarizer: diarizer ?? meetingDiarizer,
+            generator: CleanupBackendGenerator(backend: cleanupBackend,
+                                              modelID: settings.cleanupModelID))
+    }
+
+    // `runProcessing`/`runEnhanceNotes`/`startRecorderBounded`/
+    // `startMeetingTimer`/`stopMeetingTimer` all moved to
+    // `MeetingsCoordinatorImpl` along with the rest of the meetings state
+    // they close over. `makePipeline` above stays here — it's what
+    // `pipelineFactory` (passed into the coordinator's initializer) calls.
+}
+
+// MARK: - TimeoutResumeBox
+
+/// Resumes a `CheckedContinuation` exactly once, whichever of two racing
+/// unstructured tasks calls `resolve` first — see `AppController.withTimeout`
+/// for why this is an actor holding a plain continuation rather than a
+/// `withTaskGroup` race. An actor (not a lock) because `resolve` is called
+/// from ordinary `async` task bodies, not synchronous code, and this
+/// project's Swift 6 mode rejects an `NSLock` taken directly inside an
+/// `async func`.
+private actor TimeoutResumeBox<T: Sendable> {
+    private var continuation: CheckedContinuation<AppController.TimeoutOutcome<T>, Never>?
+
+    init(continuation: CheckedContinuation<AppController.TimeoutOutcome<T>, Never>) {
+        self.continuation = continuation
+    }
+
+    /// No-ops if already resolved — the second (losing) caller's result is
+    /// simply discarded.
+    func resolve(_ outcome: AppController.TimeoutOutcome<T>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(returning: outcome)
     }
 }

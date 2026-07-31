@@ -47,9 +47,22 @@ public enum AudioFileImporter {
                     outStatus.pointee = .endOfStream
                     return nil
                 }
+                // Bound every read by the frames actually left in the file. AVFoundation
+                // throws rather than returning 0 frames when read past true EOF, and a
+                // short read is not a reliable end marker: a file whose length is an
+                // exact multiple of chunkFrames fills the buffer on every read, so
+                // relying on a short read means calling read() once too many and
+                // failing the whole decode.
+                let remaining = file.length - file.framePosition
+                guard remaining > 0 else {
+                    reachedEndOfFile = true
+                    outStatus.pointee = .endOfStream
+                    return nil
+                }
                 do {
                     inputBuffer.frameLength = 0
-                    try file.read(into: inputBuffer, frameCount: chunkFrames)
+                    try file.read(into: inputBuffer,
+                                  frameCount: AVAudioFrameCount(min(Int64(chunkFrames), remaining)))
                 } catch {
                     readError = error
                     outStatus.pointee = .endOfStream
@@ -60,10 +73,7 @@ public enum AudioFileImporter {
                     outStatus.pointee = .endOfStream
                     return nil
                 }
-                if inputBuffer.frameLength < chunkFrames {
-                    // Short read: this is the file's last chunk. Some AVFoundation
-                    // versions throw instead of returning 0 frames on the next
-                    // read once truly at EOF, so avoid calling read() again.
+                if file.framePosition >= file.length {
                     reachedEndOfFile = true
                 }
                 outStatus.pointee = .haveData

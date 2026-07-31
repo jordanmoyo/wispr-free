@@ -15,14 +15,16 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.6.0</string>
+	<string>0.7.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Wispr Free records your voice while you hold the push-to-talk key so it can transcribe it locally.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Wispr Free records meeting audio on your Mac so it can transcribe and summarise calls entirely on-device.</string>
 </dict>
 </plist>

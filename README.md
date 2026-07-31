@@ -78,6 +78,17 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
 - **Automatic update check**: once a day, a lightweight check against GitHub
   releases lets you know when a new version is out. Optional — see
   [PRIVACY.md](PRIVACY.md).
+- **Meetings** (menu bar → Record Meeting): records both sides of a call —
+  your microphone and everything your Mac is playing — and produces a
+  speaker-labelled transcript, an automatic summary with action items and
+  decisions, and a notepad where your own shorthand gets tidied up against
+  the transcript. Requires the Screen Recording permission to hear the other
+  participants. Same no-cloud-code-path guarantee as dictation: recording,
+  transcription, diarization, and summarization all run on-device — see
+  [PRIVACY.md](PRIVACY.md) for the full accounting, including retention and
+  consent. Wispr can notice when a call starts in a supported app (Zoom,
+  Teams, FaceTime, Slack, Webex, Discord — not browser tabs) and remind you
+  that you can record it; it never starts recording on its own.
 
 <p align="center">
   <img src=".github/assets/menubar-menu.png" alt="Menu-bar menu: Whisper model picker, AI Cleanup toggle, and cleanup model picker" width="390">
@@ -133,6 +144,22 @@ open dist
 Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
+
+### 0.7.0
+- **Added:** Meetings — record both sides of a call, get a speaker-labelled
+  transcript, an automatic summary with action items and decisions, and a
+  notepad that gets tidied up against the transcript. Local by design, same
+  as dictation: nothing leaves the Mac. Requires the Screen Recording
+  permission.
+- **Added:** meeting audio retention settings (Settings → Privacy) — cap by
+  size (1–25 GB) or age (30–365 days), with a live count of meeting audio
+  on disk and a "Delete All Meetings…" button.
+- **Added:** automatic call detection for supported conferencing apps (Zoom,
+  Teams, FaceTime, Slack, Webex, Discord) — Wispr notices a call and reminds
+  you that you can record it, never starting on its own. Toggle it off in
+  Settings → Privacy.
+- **Changed:** "Delete All Data…" in Settings → Privacy now also purges
+  meetings and meeting audio.
 
 ### 0.6.0
 - **Added:** hold-lock — tap ⇧ while holding the push-to-talk key to lock
