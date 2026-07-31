@@ -405,6 +405,15 @@ public actor MeetingRecorder {
 
     private func trackDied(_ track: Track, error: Error) async {
         guard !stopped else { return }
+        // Everything the dying source already delivered is real audio it
+        // captured before it failed. Drain it BEFORE the failure flag goes
+        // up: `receive` discards chunks for a track already marked failed,
+        // and `finishWriter` below closes the file. The nudge `Task` that
+        // `onChunk` spawns and the one `onFailure` spawns are both
+        // unstructured, so their order is the scheduler'''s to choose — when
+        // the failure won, the tail of the recording was dropped on the
+        // floor. Draining here makes the outcome the same either way.
+        drainChunks()
         WisprLog.log("meeting recorder: \(track) died mid-recording: \(error)")
         switch track {
         case .mic:

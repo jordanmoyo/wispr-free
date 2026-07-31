@@ -145,6 +145,21 @@ Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
 
+### 0.7.1
+- **Fixed:** when a meeting's microphone or system-audio track died
+  mid-recording, the audio captured in the moments before it died could be
+  discarded instead of written.
+- **Fixed:** a device change mid-meeting — a Bluetooth headset connecting,
+  or the output device switching — no longer costs the microphone track for
+  the rest of the meeting. Wispr rebuilds the audio engine and carries on,
+  as dictation already did.
+- **Fixed:** meeting transcripts no longer contain Whisper's internal
+  markers (`<|startoftranscript|>` and friends), and no longer fill up with
+  the phrases Whisper emits over silence between speakers.
+- **Fixed:** action items are no longer attributed to people who were never
+  in the meeting. An owner the transcript never names loses the attribution;
+  the task itself is kept.
+
 ### 0.7.0
 - **Added:** Meetings — record both sides of a call, get a speaker-labelled
   transcript, an automatic summary with action items and decisions, and a
