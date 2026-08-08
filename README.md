@@ -89,6 +89,14 @@ Macs (M1 or later) on macOS 14+. No build tools needed — unzip, move
   consent. Wispr can notice when a call starts in a supported app (Zoom,
   Teams, FaceTime, Slack, Webex, Discord — not browser tabs) and remind you
   that you can record it; it never starts recording on its own.
+- **Transcribe** (sidebar → Transcribe): hand Wispr a recording you already
+  have — WAV, M4A, MP3, AIFF or CAF, up to two hours — and get a transcript
+  back, then a clean transcript, a summary with action items and decisions,
+  a written report, or chapters, each generated on demand. You pick the
+  Whisper model that transcribes and the LLM that writes; speaker
+  identification is available for recordings up to an hour. Progress is
+  shown as a percentage and the run can be cancelled, keeping whatever
+  finished. The file is read where it sits — never copied, never uploaded.
 
 <p align="center">
   <img src=".github/assets/menubar-menu.png" alt="Menu-bar menu: Whisper model picker, AI Cleanup toggle, and cleanup model picker" width="390">
@@ -144,6 +152,42 @@ open dist
 Unit tests need none of that: `swift test` works anywhere.
 
 ## Changelog
+
+### 0.8.0
+- **Added:** Transcribe, a new sidebar tab for recordings you already have.
+  Pick a file (WAV, M4A, MP3, AIFF or CAF, up to two hours), choose the
+  Whisper model that transcribes it and the LLM that writes about it, and
+  optionally ask for speaker labels — offered for recordings up to an hour,
+  where the transcript would otherwise cost more memory than it is worth.
+  The file is read where it sits: never copied, never uploaded.
+- **Added:** four outputs from any finished transcript, each generated when
+  you ask for it and kept afterwards — a clean transcript, a summary with
+  action items and decisions, a written report, and chapters with
+  timestamps.
+- **Added:** a percentage progress bar for the length of the run, and a
+  Cancel that keeps the part that finished instead of throwing it away. A
+  transcription that loses a chunk, or that you stop halfway, is saved and
+  labelled rather than discarded.
+- **Fixed:** a document that fails to regenerate no longer replaces the one
+  you already had. Every generator fails closed to an empty document, and an
+  empty document was being written straight over a good report or summary
+  that had cost minutes to produce.
+
+### 0.7.2
+- **Fixed:** dictation no longer types words you never said. Handed silence
+  or a room with nobody talking, Whisper returns a sentence from the
+  subtitles it was trained on — "Thank you.", "Thanks for watching",
+  "Sous-titrage Société Radio-Canada". Wispr now checks the recording for
+  speech before transcribing it, and checks what comes back against the
+  known artifacts afterwards. Nothing is typed, copied, or saved to history
+  when it fails either check.
+- **Added:** when that happens the pill says why — "Didn't hear you —
+  louder, or move closer" — instead of the dictation silently going
+  nowhere.
+- **Fixed:** long pill messages are no longer cut off mid-sentence. The
+  pill sizes itself to the message.
+- **Fixed:** the overlay pill is excluded from screen recordings and screen
+  shares while a meeting is being recorded.
 
 ### 0.7.1
 - **Fixed:** when a meeting's microphone or system-audio track died

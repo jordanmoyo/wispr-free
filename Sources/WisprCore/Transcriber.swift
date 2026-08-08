@@ -1,6 +1,20 @@
 import Foundation
 import WhisperKit
 
+/// A dictation transcript together with how sure the decoder was of it.
+public struct DictationTranscript: Sendable, Equatable {
+    public let text: String
+    /// The lowest per-segment average token log-probability, or nil when the
+    /// decoder produced no segments. Lower means the decoder was guessing —
+    /// see `DictationPlausibility.minimumAverageLogProbability`.
+    public let confidence: Float?
+
+    public init(text: String, confidence: Float?) {
+        self.text = text
+        self.confidence = confidence
+    }
+}
+
 public actor Transcriber {
     private let modelStore: ModelStore
     private var pipeline: WhisperKit?
@@ -30,18 +44,28 @@ public actor Transcriber {
         currentModelID = model.id
     }
 
-    /// Transcribes 16 kHz mono samples. Returns cleaned text ("" for silence).
+    /// Transcribes 16 kHz mono samples. Returns cleaned text ("" for silence)
+    /// and the decoder's confidence in it.
     /// - Parameter language: an optional pinned language code (e.g. "fr").
     ///   Without detectLanguage, WhisperKit prefills the decoder with the
     ///   <|en|> language token (its defaultLanguageCode), which makes
     ///   non-English speech come out translated into English — so nil (or
     ///   an unrecognized code) falls back to auto-detection.
-    public func transcribe(samples: [Float], language: String? = nil) async throws -> String {
+    ///
+    /// Confidence is the *lowest* segment's average log-probability, not the
+    /// mean: one bad segment is one invented sentence, and it should count.
+    /// WhisperKit also carries `noSpeechProb`, the obvious signal for this,
+    /// but it reports 0.0 for every segment on this machine's models —
+    /// measured over 72 archived recordings — so it cannot be used.
+    public func transcribe(samples: [Float],
+                           language: String? = nil) async throws -> DictationTranscript {
         guard let pipeline else { throw WisprError.modelNotLoaded }
         let options = TranscriptionOptions.build(pinned: language)
         let results = try await pipeline.transcribe(audioArray: samples, decodeOptions: options)
         let raw = results.map(\.text).joined(separator: " ")
-        return TranscriptCleaner.clean(raw)
+        return DictationTranscript(
+            text: TranscriptCleaner.clean(raw),
+            confidence: results.flatMap(\.segments).map(\.avgLogprob).min())
     }
 
     /// Timestamped transcription for Meetings. Unlike `transcribe(samples:)`,

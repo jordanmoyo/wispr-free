@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 
@@ -31,6 +32,16 @@ public enum SystemAudioError: Error, Equatable {
 /// programmatically. `permissionGranted()` probes it; on denial the caller
 /// must show `SystemAudioError.permissionDenied.userMessage` and offer
 /// `openScreenRecordingSettings()`.
+/// What a shareable-content probe concluded about screen capture.
+public enum ScreenCaptureAvailability: Equatable, Sendable {
+    case granted
+    /// The user has not granted Screen Recording. Settings will fix it.
+    case denied
+    /// Screen capture is granted as far as anyone can tell, but the capture
+    /// stack refused to answer. Settings will NOT fix it.
+    case unavailable
+}
+
 public final class SystemAudioSource: NSObject, MeetingAudioSource, SCStreamOutput,
                                      SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock()
@@ -69,13 +80,61 @@ public final class SystemAudioSource: NSObject, MeetingAudioSource, SCStreamOutp
     /// The only reliable probe for the Screen Recording grant: fetching
     /// shareable content throws when it is missing.
     public static func permissionGranted() async -> Bool {
+        await permissionProbe() == .granted
+    }
+
+    /// Asks ScreenCaptureKit for the shareable content, which is the only way
+    /// to learn whether screen capture will work — there is no preflight API.
+    ///
+    /// Reports *why* it failed rather than collapsing every failure into
+    /// "denied". A probe that throws for any other reason — `replayd`
+    /// wedged, the capture stack briefly unavailable after a binary update —
+    /// used to be reported as a missing permission, which sent the user to a
+    /// Settings pane where Wispr Free was already enabled, with nothing to
+    /// fix and no way out of the loop.
+    public static func permissionProbe() async -> ScreenCaptureAvailability {
         do {
             _ = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true)
-            return true
+            return .granted
         } catch {
-            return false
+            let error = error as NSError
+            WisprLog.log("system audio: shareable-content probe failed: "
+                + "\(error.domain) code=\(error.code) \(error.localizedDescription)")
+            return availability(forProbeError: error)
         }
+    }
+
+    /// Classifies a probe failure. Split out from `permissionProbe()` so it
+    /// can be tested without ScreenCaptureKit, whose behaviour depends on
+    /// the test machine's own privacy settings.
+    ///
+    /// `SCStreamError.userDeclined` (-3801) is the only code that means the
+    /// user has not granted screen capture. Everything else is the capture
+    /// stack failing, which the user cannot fix in Settings.
+    static func availability(forProbeError error: NSError) -> ScreenCaptureAvailability {
+        error.code == userDeclinedErrorCode ? .denied : .unavailable
+    }
+
+    static let userDeclinedErrorCode = -3801
+
+    /// Asks macOS to prompt for Screen Recording, returning whether it ended
+    /// up granted.
+    ///
+    /// The probe above only ever *asks* whether capture works; it never
+    /// prompts. So an app whose grant has gone stale — which is what happens
+    /// to Screen Recording every time the binary is replaced — reported a
+    /// missing permission and sent the user to a Settings pane where Wispr
+    /// Free was already enabled. Nothing there was wrong, nothing could be
+    /// fixed, and macOS never asked again because nobody had asked it to.
+    ///
+    /// Runs off the main actor: the call blocks until the dialog is
+    /// answered, and macOS returns false without prompting at all if this
+    /// app identity has already been declined once.
+    public static func requestAccess() async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            CGRequestScreenCaptureAccess()
+        }.value
     }
 
     public static func openScreenRecordingSettings() {

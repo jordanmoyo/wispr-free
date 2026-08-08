@@ -3,7 +3,7 @@ import SwiftUI
 /// Sidebar destinations of the unified main window, grouped as in the
 /// design: Dictation, Settings, Info.
 public enum MainTab: String, CaseIterable {
-    case history, meetings, learning
+    case history, meetings, transcribe, learning
     case general, pushToTalk, microphone, languageModel, privacy
     case about
 
@@ -11,6 +11,7 @@ public enum MainTab: String, CaseIterable {
         switch self {
         case .history: return "History"
         case .meetings: return "Meetings"
+        case .transcribe: return "Transcribe"
         case .learning: return "Learning"
         case .general: return "General"
         case .pushToTalk: return "Push to Talk"
@@ -22,7 +23,7 @@ public enum MainTab: String, CaseIterable {
     }
 
     static let groups: [(label: String, tabs: [MainTab])] = [
-        ("Dictation", [.history, .meetings, .learning]),
+        ("Dictation", [.history, .meetings, .transcribe, .learning]),
         ("Settings", [.general, .pushToTalk, .microphone, .languageModel, .privacy]),
         ("Info", [.about]),
     ]

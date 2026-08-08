@@ -10,6 +10,7 @@ struct MainWindowContext {
     let audioArchive: AudioArchiveStore
     let meetingStore: MeetingStore
     let meetingAudioStore: MeetingAudioStore
+    let transcriptionStore: TranscriptionJobStore
     let actions: SettingsActions
     /// History pane hook: re-run a past dictation's archived audio through
     /// the transcription pipeline again, appending a new entry.
@@ -17,6 +18,9 @@ struct MainWindowContext {
     /// The seam into `AppController` for the Meetings pane: start/stop a
     /// recording, kick off reprocessing or notes enhancement, delete.
     let meetingsCoordinator: any MeetingsCoordinating
+    /// The same seam for the Transcribe pane: start/cancel a run on an
+    /// uploaded file, generate an output, delete a job.
+    let transcriptionCoordinator: any TranscriptionCoordinating
 }
 
 /// The unified main window: sidebar navigation (Dictation / Settings /
@@ -40,6 +44,7 @@ struct MainWindowView: View {
         switch model.selectedTab {
         case .history: HistoryPane(context: context)
         case .meetings: MeetingsPane(context: context)
+        case .transcribe: TranscribePane(context: context)
         case .learning: LearningPane(context: context)
         case .general: GeneralPane(context: context)
         case .pushToTalk: PushToTalkPane(context: context, model: model)

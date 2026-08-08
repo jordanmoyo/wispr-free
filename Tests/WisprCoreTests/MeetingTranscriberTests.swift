@@ -37,6 +37,53 @@ private final class ScriptedTranscriber: MeetingSegmentTranscribing, @unchecked 
     }
 }
 
+/// Collects the chunk indices reported lost. Locked rather than a plain
+/// array because the callback is `@Sendable` and crosses into the
+/// transcriber's task.
+private final class FailureRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [Int] = []
+
+    func record(_ index: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        seen.append(index)
+    }
+
+    var indices: [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        return seen
+    }
+}
+
+/// Collects the ranges a chunk provider was asked for. An actor because the
+/// provider closure is `@Sendable` and Swift 6 rejects mutable capture.
+private actor RangeRecorder {
+    private(set) var ranges: [Range<Int>] = []
+    func record(_ range: Range<Int>) { ranges.append(range) }
+}
+
+/// A one-shot latch. Lets a test park a chunk provider at an exact point in
+/// the run, act, and then release it — so a cancellation lands on a known
+/// loop iteration instead of racing the task's first suspension.
+private actor Gate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+    }
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
 final class MeetingTranscriberTests: XCTestCase {
     private func seg(_ text: String, _ start: TimeInterval,
                      _ end: TimeInterval) -> MeetingTranscriptSegment {
@@ -258,5 +305,198 @@ final class MeetingTranscriberTests: XCTestCase {
         XCTAssertFalse(values.isEmpty)
         XCTAssertEqual(values.last!, 1.0, accuracy: 0.001)
         XCTAssertEqual(values, values.sorted())
+    }
+
+    // MARK: transcribe(sampleCount:chunkProvider:)
+
+    func testChunkProviderReceivesEachChunkRange() async throws {
+        let transcriber = ScriptedTranscriber(scripts: [[], [], []])
+        let sampleCount = Int(16_000 * 1_500.0)   // 25 minutes → 3 chunks
+        let recorder = RangeRecorder()
+        _ = try await MeetingTranscriber.transcribe(
+            sampleCount: sampleCount,
+            chunkProvider: { range in
+                await recorder.record(range)
+                return [Float](repeating: 0, count: range.count)
+            },
+            using: transcriber, progress: nil)
+
+        let expected = MeetingTranscriber.chunkRanges(sampleCount: sampleCount)
+        let seen = await recorder.ranges
+        XCTAssertEqual(seen, expected)
+    }
+
+    func testChunkProviderFailureLosesOnlyThatChunk() async throws {
+        let scripts = [
+            [MeetingTranscriptSegment(speaker: .others, start: 0, end: 1, text: "one")],
+            [MeetingTranscriptSegment(speaker: .others, start: 0, end: 1, text: "two")],
+        ]
+        let transcriber = ScriptedTranscriber(scripts: scripts)
+        let sampleCount = Int(16_000 * 1_500.0)
+        let segments = try await MeetingTranscriber.transcribe(
+            sampleCount: sampleCount,
+            chunkProvider: { range in
+                if range.lowerBound == 0 { throw WisprError.audioFileTooLong }
+                return [Float](repeating: 0, count: range.count)
+            },
+            using: transcriber, progress: nil)
+
+        // Chunk 0 never reached the transcriber, so its scripts shifted up.
+        XCTAssertFalse(segments.isEmpty)
+        XCTAssertFalse(segments.contains { $0.text == "one" && $0.start == 0 })
+    }
+
+    /// A lost chunk must be REPORTED, not just survived. The return value is
+    /// segments only, so without this callback a caller cannot tell "all
+    /// three chunks transcribed" from "two of three" — and would store a
+    /// recording with a ten-minute hole in the middle as complete.
+    func testALostChunkIsReportedToTheCaller() async throws {
+        let transcriber = ScriptedTranscriber(scripts: [[seg("a", 0, 1)],
+                                                        [seg("b", 0, 1)],
+                                                        [seg("c", 0, 1)]])
+        let sampleCount = Int(16_000 * 1_500.0)   // 25 minutes → 3 chunks
+        let failed = FailureRecorder()
+        let ranges = MeetingTranscriber.chunkRanges(sampleCount: sampleCount)
+        XCTAssertEqual(ranges.count, 3, "fixture must have more than one chunk")
+
+        _ = try await MeetingTranscriber.transcribe(
+            sampleCount: sampleCount,
+            chunkProvider: { range in
+                if range == ranges[1] { throw WisprError.audioFileTooLong }
+                return [Float](repeating: 0, count: range.count)
+            },
+            using: transcriber, progress: nil,
+            onChunkFailure: { index in failed.record(index) })
+
+        XCTAssertEqual(failed.indices, [1])
+    }
+
+    /// The other direction: a clean run must report nothing, or every job
+    /// would be marked degraded.
+    func testACleanRunReportsNoLostChunks() async throws {
+        let transcriber = ScriptedTranscriber(scripts: [[seg("a", 0, 1)],
+                                                        [seg("b", 0, 1)],
+                                                        [seg("c", 0, 1)]])
+        let sampleCount = Int(16_000 * 1_500.0)
+        let failed = FailureRecorder()
+
+        _ = try await MeetingTranscriber.transcribe(
+            sampleCount: sampleCount,
+            chunkProvider: { range in [Float](repeating: 0, count: range.count) },
+            using: transcriber, progress: nil,
+            onChunkFailure: { index in failed.record(index) })
+
+        XCTAssertEqual(failed.indices, [])
+    }
+
+    // MARK: - Language
+
+    /// The file-transcription path pins a language per job. It has to reach
+    /// the transcriber: a picker whose value stops at the job row is a
+    /// control that does nothing while the row claims it was applied.
+    func testTheChunkPathPassesTheLanguageThrough() async throws {
+        let transcriber = ScriptedTranscriber(scripts: [[], [], []])
+        let sampleCount = Int(16_000 * 1_500.0)
+
+        _ = try await MeetingTranscriber.transcribe(
+            sampleCount: sampleCount,
+            chunkProvider: { range in [Float](repeating: 0, count: range.count) },
+            language: "fr", using: transcriber, progress: nil)
+
+        XCTAssertEqual(transcriber.languages.count, 3)
+        XCTAssertTrue(transcriber.languages.allSatisfy { $0 == "fr" })
+    }
+
+    /// Meetings must KEEP free detection. A meeting can be multilingual, and
+    /// the samples entry point is the meetings call site: adding a language
+    /// parameter for one caller must not quietly pin the other.
+    func testTheMeetingsEntryPointStillDetectsFreely() async throws {
+        let transcriber = ScriptedTranscriber(scripts: [[], [], []])
+        let samples = [Float](repeating: 0, count: Int(16_000 * 1_500.0))
+
+        _ = try await MeetingTranscriber.transcribe(
+            samples: samples, using: transcriber, progress: nil)
+
+        XCTAssertEqual(transcriber.languages.count, 3)
+        XCTAssertTrue(transcriber.languages.allSatisfy { $0 == nil })
+    }
+
+    func testEveryChunkProviderFailureThrows() async {
+        let transcriber = ScriptedTranscriber(scripts: [[], [], []])
+        let sampleCount = Int(16_000 * 1_500.0)
+        do {
+            _ = try await MeetingTranscriber.transcribe(
+                sampleCount: sampleCount,
+                chunkProvider: { _ in throw WisprError.audioFileTooLong },
+                using: transcriber, progress: nil)
+            XCTFail("expected a throw when every chunk fails")
+        } catch {
+            XCTAssertEqual(error as? WisprError, .audioFileTooLong)
+        }
+    }
+
+    func testSamplesEntryPointStillProducesIdenticalOutput() async throws {
+        let scripts = [
+            [MeetingTranscriptSegment(speaker: .others, start: 0, end: 1, text: "alpha")],
+            [MeetingTranscriptSegment(speaker: .others, start: 0, end: 1, text: "beta")],
+        ]
+        let samples = [Float](repeating: 0.1, count: Int(16_000 * 1_500.0))
+        let samplesStub = ScriptedTranscriber(scripts: scripts)
+        let providerStub = ScriptedTranscriber(scripts: scripts)
+
+        let viaSamples = try await MeetingTranscriber.transcribe(
+            samples: samples, using: samplesStub, progress: nil)
+        let viaProvider = try await MeetingTranscriber.transcribe(
+            sampleCount: samples.count,
+            chunkProvider: { Array(samples[$0]) },
+            using: providerStub, progress: nil)
+
+        XCTAssertEqual(viaSamples.map(\.text), viaProvider.map(\.text))
+        XCTAssertEqual(viaSamples.map(\.start), viaProvider.map(\.start))
+        // The delegating entry point must also hand the transcriber the same
+        // audio: same number of chunks, each the same length. Without this the
+        // comparison above is near-tautological, since one path now calls the
+        // other and any shared defect cancels out on both sides.
+        XCTAssertEqual(samplesStub.calls, providerStub.calls)
+        XCTAssertEqual(samplesStub.calls.count, 3)
+        XCTAssertEqual(samplesStub.calls.reduce(0, +),
+                       MeetingTranscriber.chunkRanges(sampleCount: samples.count)
+                           .reduce(0) { $0 + $1.count })
+    }
+
+    func testCancellationKeepsWhatWasAlreadyTranscribed() async throws {
+        let scripts = (0..<3).map { [seg("chunk\($0)", 0, 1)] }
+        let transcriber = ScriptedTranscriber(scripts: scripts)
+        let sampleCount = Int(16_000 * 1_500.0)   // 25 minutes → 3 chunks
+        let chunkZeroRequested = Gate()
+        let cancelDelivered = Gate()
+
+        let task = Task { () -> [MeetingTranscriptSegment] in
+            try await MeetingTranscriber.transcribe(
+                sampleCount: sampleCount,
+                chunkProvider: { range in
+                    // Chunk 0 parks here until the test has cancelled, so the
+                    // cancellation is guaranteed to be visible at the top of
+                    // the NEXT iteration. Cancelling from outside without this
+                    // latch would race the task's first suspension point.
+                    if range.lowerBound == 0 {
+                        await chunkZeroRequested.open()
+                        await cancelDelivered.wait()
+                    }
+                    return [Float](repeating: 0, count: range.count)
+                },
+                using: transcriber, progress: nil)
+        }
+
+        await chunkZeroRequested.wait()
+        task.cancel()
+        await cancelDelivered.open()
+
+        // The contract is RETURN what was already transcribed, never throw and
+        // never fabricate: chunk 0 was served before the cancel, so it must
+        // come back; chunks 1 and 2 must not have been transcribed at all.
+        let segments = try await task.value
+        XCTAssertEqual(segments.map(\.text), ["chunk0"])
+        XCTAssertEqual(transcriber.calls.count, 1)
     }
 }

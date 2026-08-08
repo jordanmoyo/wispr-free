@@ -265,19 +265,35 @@ public enum MeetingSummarizer {
             // Map is 70% of the work, reduce the remaining 30%.
             progress?(0.7 * Double(index + 1) / Double(chunks.count))
         }
-        guard !notes.isEmpty else {
-            progress?(1.0)
-            return .empty
-        }
+        let output = await reduce(notes: notes, transcript: transcript,
+                                  using: generator)
+        progress?(1.0)
+        return output
+    }
 
-        // Reduce: one call over the collected notes.
+    /// The reduce half on its own: one call over notes that were condensed
+    /// somewhere else.
+    ///
+    /// This exists so a caller that already holds a cached map pass — a
+    /// transcription job, whose `mapNotes` the Report also reduces from —
+    /// pays for the condensation once rather than once per document. The map
+    /// pass over a two-hour transcript is ~25 model calls; running it twice
+    /// for two documents is minutes of on-device generation for nothing.
+    ///
+    /// `transcript` is the haystack `stripFabricatedOwners` checks owner
+    /// names against, so it must be the same rendered transcript the notes
+    /// were condensed from.
+    public static func reduce(notes: [String],
+                              transcript: String,
+                              using generator: any MeetingTextGenerating) async
+        -> MeetingSummaryOutput {
+        guard !notes.isEmpty else { return .empty }
         let combined = notes.joined(separator: "\n")
         do {
             let raw = try await generator.generate(
                 system: MeetingPrompt.reduceSystem,
                 user: "Condensed notes:\n\n\(combined)",
                 maxTokens: MeetingPrompt.maxTokens(forTranscriptCharacters: combined.count))
-            progress?(1.0)
             let output = parse(raw)
             return MeetingSummaryOutput(
                 summary: output.summary,
@@ -286,7 +302,6 @@ public enum MeetingSummarizer {
                 decisions: output.decisions)
         } catch {
             WisprLog.log("summarize: reduce FAILED: \(error)")
-            progress?(1.0)
             return .empty
         }
     }

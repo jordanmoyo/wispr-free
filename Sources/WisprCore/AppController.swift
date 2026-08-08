@@ -13,6 +13,7 @@ public final class AppController: NSObject {
     private let audioArchive = AudioArchiveStore.defaultStore()
     private let meetingStore = MeetingStore.defaultStore()
     private let meetingAudioStore = MeetingAudioStore.defaultStore()
+    private let transcriptionStore = TranscriptionJobStore.defaultStore()
     private let hotkey = HotkeyMonitor()
     private let recorder = Recorder()
     private let pill = OverlayPill()
@@ -93,6 +94,37 @@ public final class AppController: NSObject {
     /// `meetingStartRefusal` to refuse a second meeting while one is already
     /// active.
     var meetingRecordingActive: Bool { meetingsCoordinator.meetingRecordingActive }
+
+    // MARK: - Transcribe
+    //
+    // `AppController` is itself the Transcribe pane's coordinator (see the
+    // `TranscriptionCoordinating` extension below): a run needs the Whisper
+    // pipeline, the MLX backend and the dictation phase machine, all of which
+    // live here. Only the fields a run's own lifetime needs are stored.
+
+    /// The single in-flight transcription run, so `cancel()` can stop it and
+    /// `start(request:)` can refuse a second one. Cleared by the run's own
+    /// `defer`, whether it succeeded, failed, or was cancelled — leaving it
+    /// set would refuse every later run for the rest of the session.
+    private var transcriptionRun: Task<Void, Never>?
+    /// Which job `transcriptionRun` is transcribing. Kept alongside the task
+    /// so `register(model:)` can tell a pane opened mid-run which job is
+    /// live, and `delete(id:)` can tell whether the row being deleted is the
+    /// one being worked on.
+    private var transcriptionRunJobID: UUID?
+    /// Claimed synchronously, before `start(request:)`'s first `await`, and
+    /// released once that call has fully resolved. `transcriptionRun` alone
+    /// cannot gate re-entrancy: it is not assigned until after the job row
+    /// has been written, and the main actor is free across that await, so two
+    /// overlapping `start` calls would both observe `transcriptionRun == nil`
+    /// and both begin a run. The `TranscriptionViewModel.startInFlight` /
+    /// `MeetingsCoordinatorImpl.startMeetingTask` precedent: mutate the flag
+    /// BEFORE the await, not after.
+    private var transcriptionStartInFlight = false
+    /// Weak, like `MeetingsCoordinatorImpl.meetingsModel`: the coordinator
+    /// must never be the thing keeping a closed Transcribe pane's view model
+    /// alive.
+    private weak var transcriptionModel: TranscriptionViewModel?
 
     public override init() {
         super.init()
@@ -193,6 +225,9 @@ public final class AppController: NSObject {
 
     private func bootstrap() async {
         WisprLog.log("bootstrap: begin (hotkey keyCode=\(settings.hotkeyKeyCode))")
+        // Keeps the pill out of a screen share for the duration of a meeting;
+        // see `OverlayPill.sharingType(meetingActive:)`.
+        pill.isMeetingActive = { [weak self] in self?.meetingRecordingActive ?? false }
         let micOK = await Permissions.microphoneGranted()
         micGranted = micOK
         Permissions.requestInputMonitoring()
@@ -333,15 +368,19 @@ public final class AppController: NSObject {
             }
             return
         }
-        let peak = Recorder.peakAmplitude(of: samples)
-        guard peak >= Recorder.silencePeakThreshold else {
-            // The device delivered buffers, but all zeros — transcribing
-            // digital silence makes Whisper hallucinate ("you").
-            WisprLog.log("recording is digital silence (peak=\(peak)) — input device delivering empty buffers")
+        // Handed audio with no speech in it, Whisper does not return nothing —
+        // it returns a fluent sentence from its subtitle-heavy training data,
+        // which would be typed into the user's document as if they had said
+        // it. Checking the audio first is the only way to keep that out.
+        let quality = AudioQualityGate.classify(samples)
+        if let message = quality.userMessage {
+            WisprLog.log("refusing to transcribe: \(quality) " +
+                         "(peak=\(Recorder.peakAmplitude(of: samples)), " +
+                         "voicedFrames=\(AudioQualityGate.voicedFrameCount(samples)))")
             phase = .idle
             statusItem.setIcon(.idle)
             windowModel.activity = .ready
-            pill.showError("Mic delivered silence — check input device in Settings")
+            pill.showError(message)
             return
         }
         phase = .transcribing
@@ -351,8 +390,24 @@ public final class AppController: NSObject {
 
         Task {
             do {
-                let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
-                WisprLog.log("transcribed \(text.count) chars")
+                let transcript = try await transcriber.transcribe(
+                    samples: samples, language: settings.pinnedLanguage)
+                let text = transcript.text
+                WisprLog.log("transcribed \(text.count) chars "
+                    + "(confidence=\(transcript.confidence.map { "\($0)" } ?? "none"))")
+                // Second line of defence, after the audio gate: what came
+                // back may still be text the user never said. Nothing is
+                // typed, copied, or written to history in that case — the
+                // pill says so instead of the dictation vanishing silently.
+                if let refusal = DictationPlausibility.refusal(
+                    for: text, quality: quality, confidence: transcript.confidence) {
+                    WisprLog.log("refusing transcript (\(refusal)): \(text.prefix(60))")
+                    self.pill.showError(refusal.userMessage)
+                    self.phase = .idle
+                    self.statusItem.setIcon(.idle)
+                    self.windowModel.activity = .ready
+                    return
+                }
                 // Captured before cleanup mutates the text below, so history
                 // can record what was actually said alongside what was
                 // delivered.
@@ -755,8 +810,24 @@ public final class AppController: NSObject {
                     self.pill.showError("No speech detected in file")
                     return
                 }
-                let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
+                let text = try await transcriber.transcribe(
+                    samples: samples, language: settings.pinnedLanguage).text
                 WisprLog.log("file import transcribed \(text.count) chars from \(samples.count) samples")
+                // An imported file may legitimately be a quiet recording, so
+                // unlike live dictation its audio is not held to a speech
+                // floor, and its confidence is not held to one either: the
+                // user picked this file and expects a transcript, and the
+                // output lands in History rather than in their document. A
+                // subtitle sign-off coming back from a stretch of it is no
+                // more real here than anywhere else, though.
+                if let refusal = DictationPlausibility.refusal(for: text, quality: .speech) {
+                    WisprLog.log("file import refused (\(refusal)): \(text.prefix(60))")
+                    self.phase = .idle
+                    self.statusItem.setIcon(.idle)
+                    self.windowModel.activity = .ready
+                    self.pill.showError("No speech detected in file")
+                    return
+                }
                 let rawText = text
                 let (cleanedText, appliedCorrections) = await self.cleanupAndCorrect(rawText)
                 self.phase = .idle
@@ -877,7 +948,8 @@ public final class AppController: NSObject {
                 let samples = try await Task.detached(priority: .userInitiated) {
                     try AudioFileImporter.loadSamples(url: url)
                 }.value
-                let text = try await transcriber.transcribe(samples: samples, language: settings.pinnedLanguage)
+                let text = try await transcriber.transcribe(
+                    samples: samples, language: settings.pinnedLanguage).text
                 WisprLog.log("retranscribe: \(text.count) chars from \(samples.count) samples")
                 let rawText = text
                 let (cleanedText, appliedCorrections) = await self.cleanupAndCorrect(rawText)
@@ -957,9 +1029,11 @@ public final class AppController: NSObject {
                 historyStore: historyStore, correctionStore: correctionStore,
                 vocabularyStore: vocabularyStore, audioArchive: audioArchive,
                 meetingStore: meetingStore, meetingAudioStore: meetingAudioStore,
+                transcriptionStore: transcriptionStore,
                 actions: makeSettingsActions(),
                 retranscribe: { [weak self] entry in self?.retranscribe(entry: entry) },
-                meetingsCoordinator: meetingsCoordinator)
+                meetingsCoordinator: meetingsCoordinator,
+                transcriptionCoordinator: self)
         }
         mainWindow?.show(tab: tab)
     }
@@ -1054,15 +1128,19 @@ extension AppController {
     /// refusal — the caller returns the running meeting's id instead.
     /// `nonisolated` (pure function of its arguments, no actor state) so
     /// tests can call it synchronously without hopping onto the main actor.
-    nonisolated static func meetingStartRefusal(dictationPhaseIdle: Bool,
-                                                meetingActive: Bool,
-                                                micGranted: Bool,
-                                                screenRecordingGranted: Bool) -> MeetingStartFailure? {
+    nonisolated static func meetingStartRefusal(
+        dictationPhaseIdle: Bool,
+        meetingActive: Bool,
+        micGranted: Bool,
+        screenCapture: ScreenCaptureAvailability) -> MeetingStartFailure? {
         if !dictationPhaseIdle { return .dictationInProgress }
         if meetingActive { return nil }
         if !micGranted { return .micDenied }
-        if !screenRecordingGranted { return .screenRecordingDenied }
-        return nil
+        switch screenCapture {
+        case .granted: return nil
+        case .denied: return .screenRecordingDenied
+        case .unavailable: return .screenCaptureUnavailable
+        }
     }
 
     nonisolated static func dictationBlockedMessage() -> String {
@@ -1172,5 +1250,295 @@ private actor TimeoutResumeBox<T: Sendable> {
         guard let continuation else { return }
         self.continuation = nil
         continuation.resume(returning: outcome)
+    }
+}
+
+// MARK: - TranscriptionCoordinating
+
+/// A transcriber that can be pointed at a specific Whisper model, which is
+/// what a PER-JOB model choice needs — `MeetingSegmentTranscribing` alone
+/// describes a transcriber whose model somebody else already picked.
+/// `Transcriber` conforms; a test conforms a spy to it and asserts which
+/// model id a run actually asked for.
+public protocol ModelLoadingTranscribing: MeetingSegmentTranscribing {
+    func load(model: WhisperModel) async throws
+}
+
+extension Transcriber: ModelLoadingTranscribing {}
+
+extension AppController: TranscriptionCoordinating {
+    /// Starts one file transcribing, or says why it cannot.
+    ///
+    /// The refusals are ordered cheapest-fix-first, the same rule
+    /// `meetingStartRefusal` follows. Nothing here touches
+    /// `statusItem.setIcon` — deliberately. `importAudioFile` does, and an
+    /// earlier version of that path set `.idle` on exit and so silently
+    /// erased a live meeting's recording indicator while the app went on
+    /// capturing (see its comment, and `MeetingMutualExclusionTests`). A
+    /// transcription run has the Transcribe pane's own progress bar; it has
+    /// no business repainting the menu bar.
+    public func start(request: TranscriptionRequest)
+        async -> Result<UUID, TranscriptionStartFailure> {
+        guard phase == .idle else { return .failure(.dictationInProgress) }
+        guard !meetingRecordingActive else { return .failure(.meetingInProgress) }
+        // A model that isn't on disk yet would be downloaded by
+        // `transcriber.load` inside the run — gigabytes, with no progress
+        // reporting and no cancellation check, behind a bar that reads
+        // "0% · Transcribing". Refuse up front and name the download instead.
+        if let requested = ModelRegistry.model(id: request.transcriptionModelID),
+           !modelStore.isInstalled(requested) {
+            WisprLog.log("transcription start refused: model not installed "
+                + "\(requested.id)")
+            return .failure(.modelNotInstalled(requested.displayName))
+        }
+        // `modelReady` tracks the DICTATION model's load, so it only gates a
+        // run that actually uses it. A run on any other model gets its own
+        // `Transcriber` (see `runTranscriber(for:)`) and waits for nothing.
+        guard request.transcriptionModelID != settings.selectedModelID || modelReady else {
+            return .failure(.modelLoading)
+        }
+        guard transcriptionRun == nil, !transcriptionStartInFlight else {
+            return .failure(.alreadyRunning)
+        }
+        transcriptionStartInFlight = true
+        defer { transcriptionStartInFlight = false }
+
+        // The reader is built BEFORE the row exists. It is what rejects a
+        // file that is too long or cannot be decoded, and a row created first
+        // would be orphaned by that rejection: a permanently `.processing`
+        // job for a file that never started.
+        let reader: AudioFileReader
+        do {
+            reader = try AudioFileReader(url: request.sourceURL)
+        } catch WisprError.audioFileTooLong {
+            WisprLog.log("transcription start refused: file too long")
+            return .failure(.fileTooLong)
+        } catch WisprError.audioFileUnreadable(let reason) {
+            WisprLog.log("transcription start refused: unreadable (\(reason))")
+            return .failure(.fileUnreadable(reason))
+        } catch {
+            WisprLog.log("transcription start refused: \(error)")
+            return .failure(.fileUnreadable(error.localizedDescription))
+        }
+
+        let job = Self.makeJob(request: request,
+                               durationSeconds: reader.durationSeconds)
+        await transcriptionStore.upsert(job)
+
+        let store = transcriptionStore
+        let diarizer: (any MeetingDiarizing)? = request.diarize ? meetingDiarizer : nil
+        let runTranscriber = self.runTranscriber(for: request)
+        transcriptionRunJobID = job.id
+        transcriptionRun = Task { [weak self] in
+            defer {
+                self?.transcriptionRun = nil
+                self?.transcriptionRunJobID = nil
+                // Without this the pane's `isRunning` stays true forever and
+                // Start never re-enables — the run is over either way, so the
+                // bar must come down on success, failure AND cancellation.
+                self?.transcriptionModel?.syncActive(id: nil)
+                self?.transcriptionModel?.updateProgress(nil)
+            }
+            await Self.performTranscriptionRun(
+                jobID: job.id, request: request, audio: reader,
+                transcriber: runTranscriber, diarizer: diarizer, store: store,
+                progress: { progress in
+                    Task { @MainActor in
+                        self?.transcriptionModel?.updateProgress(progress)
+                    }
+                })
+        }
+        WisprLog.log("transcription start: job=\(job.id) "
+            + "model=\(request.transcriptionModelID) "
+            + "document=\(request.enhancementModelID) "
+            + "diarize=\(request.diarize) seconds=\(reader.durationSeconds)")
+        return .success(job.id)
+    }
+
+    /// Cancellation is cooperative: `MeetingTranscriber` breaks between
+    /// chunks and `TranscriptionPipeline` then stores what it had as
+    /// `.partial`. Deliberately NOT awaited — a chunk is ten minutes of
+    /// audio, so awaiting would leave the Cancel button dead for minutes.
+    public func cancel() async {
+        guard let run = transcriptionRun else { return }
+        WisprLog.log("transcription cancel requested: job="
+            + "\(transcriptionRunJobID?.uuidString ?? "none")")
+        run.cancel()
+    }
+
+    public func generate(kind: TranscriptOutputKind, jobID: UUID) async {
+        // `performGenerate` loads THIS job's document model into the SHARED
+        // `MLXCleanupBackend`, which evicts whatever dictation had loaded.
+        // `CleanupEngine` shares that backend instance and is not told, so
+        // its `ensureLoadStarted` short-circuits on a non-nil `loadTask` and
+        // every later dictation would silently clean up with this job's
+        // model. Unloading the engine on both sides of the call makes the
+        // next dictation reload the user's own model lazily — the same
+        // principle `runTranscriber(for:)` holds for Whisper.
+        let jobModelID = await transcriptionStore.job(id: jobID)?.enhancementModelID
+        let repoints = Self.generateRepointsCleanupModel(
+            jobModelID: jobModelID, dictationModelID: settings.cleanupModelID)
+        if repoints { await cleanupEngine.unload() }
+        await Self.performGenerate(
+            kind: kind, jobID: jobID, store: transcriptionStore,
+            backend: cleanupBackend,
+            progress: { [weak self] fraction in
+                Task { @MainActor in
+                    self?.transcriptionModel?.updateProgress(
+                        TranscriptionProgress.make(stage: .generating,
+                                                   stageFraction: fraction,
+                                                   diarizationEnabled: false))
+                }
+            })
+        if repoints { await cleanupEngine.unload() }
+        transcriptionModel?.updateProgress(nil)
+    }
+
+    /// Removes the row, cancelling this job's own run first. The store's
+    /// `update(id:)` already refuses to resurrect a deleted row, so the
+    /// cancel is not what makes the delete safe — it is what stops the app
+    /// spending another hour transcribing audio for a job the user just threw
+    /// away.
+    public func delete(id: UUID) async {
+        if transcriptionRunJobID == id {
+            transcriptionRun?.cancel()
+        }
+        await transcriptionStore.delete(id: id)
+    }
+
+    /// Mirrors `MeetingsCoordinatorImpl.register(model:)`: a pane opened
+    /// while a run is already going shows that run rather than a stale idle
+    /// state.
+    @MainActor public func register(model: TranscriptionViewModel) {
+        transcriptionModel = model
+        model.syncActive(id: transcriptionRunJobID)
+    }
+
+    // MARK: Testable seams
+    //
+    // `AppController` itself cannot be constructed in a test —
+    // `StatusItemController.init()` calls `NSStatusBar.system
+    // .statusItem(withLength:)`, a real side effect with no test-only
+    // alternative (see `MeetingsCoordinatorImpl`'s doc comment). So the two
+    // decisions that must be provably right — that a run uses the model the
+    // REQUEST named, and that the row records the request's own choices —
+    // live in `nonisolated static` functions a test can call directly with
+    // spies, and `start`/`generate` above are the straight-line code that
+    // calls them.
+
+    /// Whether generating a document for this job would leave the shared
+    /// cleanup backend holding a model dictation did not ask for.
+    ///
+    /// True only when the job names a model AND it differs from the one
+    /// dictation is set to: a job with no recorded model cannot repoint
+    /// anything, and unloading when the two agree would throw away a warm
+    /// model for nothing, adding a load to the next dictation.
+    nonisolated static func generateRepointsCleanupModel(
+        jobModelID: String?, dictationModelID: String) -> Bool {
+        guard let jobModelID else { return false }
+        return jobModelID != dictationModelID
+    }
+
+    /// The row one request becomes. Every per-job choice the setup screen
+    /// offers is copied here: a picker whose value never reached the row
+    /// would make the whole screen decorative, and `performGenerate` reads
+    /// `enhancementModelID` back off the row hours later when the user asks
+    /// for a document.
+    nonisolated static func makeJob(request: TranscriptionRequest,
+                                    durationSeconds: Double,
+                                    createdAt: Date = Date()) -> TranscriptionJob {
+        TranscriptionJob(
+            title: TranscriptionJob.defaultTitle(sourcePath: request.sourceURL.path),
+            createdAt: createdAt,
+            sourcePath: request.sourceURL.path,
+            durationSeconds: durationSeconds,
+            transcriptionModelID: request.transcriptionModelID,
+            enhancementModelID: request.enhancementModelID,
+            language: request.language,
+            diarizationRequested: request.diarize)
+    }
+
+    /// The body of one run: loads the Whisper model the REQUEST asked for —
+    /// not whichever model dictation happens to have selected — and only then
+    /// hands that transcriber to the pipeline.
+    ///
+    /// A model that cannot be loaded fails the row rather than transcribing
+    /// with the wrong one. Silently substituting a different model would
+    /// produce a transcript the user cannot account for, at a quality they
+    /// did not choose.
+    nonisolated static func performTranscriptionRun(
+        jobID: UUID,
+        request: TranscriptionRequest,
+        audio: any AudioChunkProviding,
+        transcriber: any ModelLoadingTranscribing,
+        diarizer: (any MeetingDiarizing)?,
+        store: TranscriptionJobStore,
+        progress: (@Sendable (TranscriptionProgress) -> Void)?) async {
+        guard let model = ModelRegistry.model(id: request.transcriptionModelID) else {
+            WisprLog.log("transcription run: unknown model id "
+                + "\(request.transcriptionModelID)")
+            await store.update(id: jobID) {
+                $0.status = .failed
+                $0.failureNote = "The transcription model this job asked for is "
+                    + "no longer available. Pick another one in Settings › Models."
+            }
+            progress?(TranscriptionProgress(stage: .done, fraction: 1))
+            return
+        }
+        do {
+            try await transcriber.load(model: model)
+        } catch {
+            WisprLog.log("transcription run: model load FAILED id=\(model.id) "
+                + "error=\(error)")
+            await store.update(id: jobID) {
+                $0.status = .failed
+                $0.failureNote = "The \(model.displayName) model could not be "
+                    + "loaded, so this file was not transcribed."
+            }
+            progress?(TranscriptionProgress(stage: .done, fraction: 1))
+            return
+        }
+        await TranscriptionPipeline.transcribe(
+            jobID: jobID, audio: audio, diarize: request.diarize,
+            language: request.language,
+            transcriber: transcriber, diarizer: diarizer,
+            store: store, progress: progress)
+    }
+
+    /// Generates one document with the model THIS job was set up with, read
+    /// back off its row — `start` copied it there from the request, and a
+    /// document generated hours later must still use the model the user
+    /// picked for this file rather than whatever dictation's cleanup setting
+    /// says today.
+    nonisolated static func performGenerate(
+        kind: TranscriptOutputKind,
+        jobID: UUID,
+        store: TranscriptionJobStore,
+        backend: any CleanupBackend,
+        progress: (@Sendable (Double) -> Void)?) async {
+        guard let job = await store.job(id: jobID) else { return }
+        await TranscriptionPipeline.generate(
+            kind: kind, jobID: jobID, store: store,
+            using: CleanupBackendGenerator(backend: backend,
+                                           modelID: job.enhancementModelID),
+            progress: progress)
+    }
+
+    /// The transcriber a run uses: the shared dictation one when the request
+    /// names the model dictation already has loaded, and a DEDICATED
+    /// `Transcriber` otherwise.
+    ///
+    /// Loading the request's model into the shared actor would silently
+    /// repoint dictation at it. Nothing about a transcription run blocks the
+    /// hotkey — `phase` stays `.idle` for the whole run — so the very next
+    /// dictation would decode with a model the user chose for one file, not
+    /// for their dictation. A second `Transcriber` costs a second resident
+    /// model for the length of the run, which is the price of not lying about
+    /// either choice.
+    private func runTranscriber(for request: TranscriptionRequest)
+        -> any ModelLoadingTranscribing {
+        request.transcriptionModelID == settings.selectedModelID
+            ? transcriber
+            : Transcriber(modelStore: modelStore)
     }
 }

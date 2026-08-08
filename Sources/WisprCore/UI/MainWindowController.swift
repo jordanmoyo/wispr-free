@@ -17,15 +17,19 @@ public final class MainWindowController {
                 historyStore: HistoryStore, correctionStore: CorrectionStore,
                 vocabularyStore: VocabularyStore, audioArchive: AudioArchiveStore,
                 meetingStore: MeetingStore, meetingAudioStore: MeetingAudioStore,
+                transcriptionStore: TranscriptionJobStore,
                 actions: SettingsActions, retranscribe: @escaping (HistoryEntry) -> Void,
-                meetingsCoordinator: any MeetingsCoordinating) {
+                meetingsCoordinator: any MeetingsCoordinating,
+                transcriptionCoordinator: any TranscriptionCoordinating) {
         self.model = model
         let context = MainWindowContext(
             settings: settings, modelStore: modelStore, historyStore: historyStore,
             correctionStore: correctionStore, vocabularyStore: vocabularyStore,
             audioArchive: audioArchive, meetingStore: meetingStore,
-            meetingAudioStore: meetingAudioStore, actions: actions,
-            retranscribe: retranscribe, meetingsCoordinator: meetingsCoordinator)
+            meetingAudioStore: meetingAudioStore,
+            transcriptionStore: transcriptionStore, actions: actions,
+            retranscribe: retranscribe, meetingsCoordinator: meetingsCoordinator,
+            transcriptionCoordinator: transcriptionCoordinator)
         makeView = { AnyView(MainWindowView(model: model, context: context)) }
     }
 

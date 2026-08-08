@@ -8,6 +8,12 @@ public extension Notification.Name {
 
 public enum MeetingStartFailure: Error, Equatable {
     case screenRecordingDenied
+    /// Screen Recording is granted, but ScreenCaptureKit would not answer.
+    /// Kept distinct from `.screenRecordingDenied` because the fix is
+    /// different: sending someone to a Settings pane where Wispr Free is
+    /// already ticked leaves them toggling a switch that was never the
+    /// problem.
+    case screenCaptureUnavailable
     case dictationInProgress
     case micDenied
     case bothTracksFailed
@@ -23,6 +29,11 @@ public enum MeetingStartFailure: Error, Equatable {
             return "Wispr needs Screen Recording permission to hear the other "
                 + "participants. Open System Settings › Privacy & Security › "
                 + "Screen Recording, enable Wispr Free, then start again."
+        case .screenCaptureUnavailable:
+            return "macOS would not start screen capture, even though Wispr "
+                + "Free has permission. This usually clears after quitting "
+                + "and reopening Wispr Free; if macOS asks for Screen "
+                + "Recording again after an update, approve it once more."
         case .dictationInProgress:
             return "Finish the dictation in progress before starting a meeting."
         case .micDenied:

@@ -14,7 +14,9 @@ public protocol MeetingSegmentTranscribing: Sendable {
 ///
 /// Meetings always transcribe with free language detection (`language: nil`),
 /// ignoring the dictation language pin, because a meeting may be
-/// multilingual.
+/// multilingual. The chunk-provider overload below takes a `language`
+/// argument for the file-transcription path, which lets a user pin one; it
+/// defaults to nil so the meetings call site keeps that free detection.
 public enum MeetingTranscriber {
     /// 10 minutes per chunk bounds peak memory at ~38 MB of Float per chunk
     /// and gives progress roughly every couple of minutes of wall clock.
@@ -98,18 +100,54 @@ public enum MeetingTranscriber {
                                   using transcriber: any MeetingSegmentTranscribing,
                                   progress: (@Sendable (Double) -> Void)?) async throws
         -> [MeetingTranscriptSegment] {
-        let ranges = chunkRanges(sampleCount: samples.count)
+        try await transcribe(sampleCount: samples.count,
+                             chunkProvider: { Array(samples[$0]) },
+                             using: transcriber, progress: progress)
+    }
+
+    /// Chunk-driven counterpart for audio too long to hold in memory: the
+    /// caller supplies each chunk's samples on demand instead of an array of
+    /// the whole recording. Two hours at 16 kHz is 460 MB as `[Float]`, which
+    /// is what `AudioFileReader` exists to avoid.
+    ///
+    /// A `chunkProvider` throw is treated exactly like a transcription throw
+    /// — one unreadable chunk loses ten minutes, not the recording.
+    ///
+    /// Cancellation BREAKS rather than throws, returning the segments
+    /// collected so far. A user who cancels a ninety-minute job must keep the
+    /// eighty minutes already transcribed.
+    ///
+    /// `language` defaults to nil so the meetings caller above keeps its free
+    /// detection unchanged; the file-transcription path passes the language
+    /// the user pinned for that one job.
+    ///
+    /// `onChunkFailure` reports every chunk that was lost. Without it the
+    /// return value cannot distinguish "all twelve chunks transcribed" from
+    /// "seven of twelve", and a caller that stores a status would call a
+    /// recording with a ten-minute hole in the middle complete.
+    public static func transcribe(
+        sampleCount: Int,
+        chunkProvider: @Sendable (Range<Int>) async throws -> [Float],
+        language: String? = nil,
+        using transcriber: any MeetingSegmentTranscribing,
+        progress: (@Sendable (Double) -> Void)?,
+        onChunkFailure: (@Sendable (Int) -> Void)? = nil) async throws
+        -> [MeetingTranscriptSegment] {
+        let ranges = chunkRanges(sampleCount: sampleCount)
         guard !ranges.isEmpty else { return [] }
 
         var collected: [MeetingTranscriptSegment] = []
         var failures = 0
+        var attempted = 0
         var lastError: Error?
         for (index, range) in ranges.enumerated() {
+            if Task.isCancelled { break }
+            attempted += 1
             let offset = Double(range.lowerBound) / AudioResampler.targetSampleRate
             do {
-                let chunk = Array(samples[range])
+                let chunk = try await chunkProvider(range)
                 let segments = try await transcriber.transcribeSegments(
-                    samples: chunk, language: nil, progress: nil)
+                    samples: chunk, language: language, progress: nil)
                 let shifted = offsetSegments(segments, by: offset)
                 if index == 0 {
                     // Nothing precedes the first chunk, so there is no seam
@@ -124,11 +162,18 @@ public enum MeetingTranscriber {
                 // One bad chunk loses ten minutes, not the whole meeting.
                 failures += 1
                 lastError = error
+                onChunkFailure?(index)
                 WisprLog.log("meeting transcribe: chunk \(index) FAILED: \(error)")
             }
             progress?(Double(index + 1) / Double(ranges.count))
         }
-        guard failures < ranges.count else { throw lastError ?? WisprError.modelNotLoaded }
+        // Every chunk that was actually attempted failed — nothing was
+        // produced and the caller must be told. `attempted` rather than
+        // `ranges.count` so a cancellation before any work is not reported as
+        // a total failure.
+        guard attempted == 0 || failures < attempted else {
+            throw lastError ?? WisprError.modelNotLoaded
+        }
         return collected
     }
 

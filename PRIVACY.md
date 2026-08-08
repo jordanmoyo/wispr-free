@@ -39,6 +39,7 @@ Wispr Free writes to `~/Library/Application Support/Wispr/`:
 | `wispr.log` | Diagnostic log: timestamps, model ids, permission and failure reasons. No transcript text, no dictated or meeting content | `0600`, excluded from Time Machine backups |
 | `meetings.json` | Meeting metadata, transcripts, summaries | `0600`, excluded from Time Machine backups |
 | `meetings/<meeting-UUID>-mic.m4a` and `-system.m4a` | Meeting audio (16 kHz mono AAC) | `0600`, excluded from Time Machine backups — applied once the recording finishes, see "Meetings" below |
+| `transcriptions.json` | File transcriptions (Transcribe tab): the path of each audio file you transcribed, its transcript, and every clean transcript, summary, report, and chapter list generated from it. The audio file itself is only referenced — Wispr Free never copies it | `0600`, excluded from Time Machine backups |
 
 `0600` means only your macOS user account can read these files, and macOS's
 `isExcludedFromBackup` flag keeps them out of Time Machine. Neither
@@ -68,6 +69,11 @@ language, toggles) live in `UserDefaults`, not in these files.
   tells you so rather than deleting some of them; stop the meeting and try
   again. **Delete All Data…** also purges meetings along with history,
   corrections, and archived audio, and refuses on the same condition.
+- **File transcriptions:** delete one from the Transcribe tab's library —
+  that removes its transcript and every document generated from it, and
+  never touches the audio file you transcribed. Settings → Privacy →
+  **Delete All Data…** purges every transcription along with history,
+  corrections, archived audio, and meetings.
 - **Everything, including models:** `brew uninstall --zap wispr-free` if you
   installed via Homebrew, or manually delete
   `~/Library/Application Support/Wispr/` and drag the app to the Trash.
@@ -99,6 +105,22 @@ language, toggles) live in `UserDefaults`, not in these files.
   or after one. The once-a-day update check described below is on a timer
   and is not suppressed while a meeting is recording; it sends no meeting
   data, and you can turn it off in Settings → General.
+
+## Transcribe
+
+- The audio file you pick is read where it sits. Wispr Free never copies it,
+  never moves it, and never uploads it — `transcriptions.json` stores its
+  path, not its contents.
+- Transcription, speaker identification, and every document generated from a
+  transcript (clean transcript, summary, report, chapters) run on-device,
+  through the same local WhisperKit, diarization, and MLX models the rest of
+  the app uses. Nothing about the recording goes over the network.
+- What is stored is the file's path, its transcript, and each document you
+  asked for, in `transcriptions.json` at `0600` and excluded from Time
+  Machine, like the other files in the table above.
+- Deleting a transcription from the Transcribe library removes its transcript
+  and its documents and leaves your audio file untouched. "Delete All Data…"
+  in Settings → Privacy removes every transcription the same way.
 
 ## Accessibility usage
 

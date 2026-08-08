@@ -7,3 +7,4 @@ dist/
 *.keychain-db
 .worktrees/
 .playwright-mcp/
+.claude/

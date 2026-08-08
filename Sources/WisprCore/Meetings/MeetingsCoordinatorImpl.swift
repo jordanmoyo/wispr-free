@@ -80,6 +80,11 @@ final class MeetingsCoordinatorImpl {
     /// opposite transition, and unblocks dictation as soon as the mic tap is
     /// LIKELY down — narrower than a guarantee; see `stopMeeting`'s comment.
     private var meetingStopInProgress = false
+    /// Whether this launch has already asked macOS to prompt for Screen
+    /// Recording. macOS shows that dialog at most once per app identity, so
+    /// asking again on every "Record Meeting" tap would just add a blocking
+    /// call that returns false.
+    private var screenCaptureAccessRequested = false
     /// The id of the meeting currently being set up, so `deleteMeeting` can
     /// refuse deleting it even though `meetingRecordingID` is nil for that
     /// whole window.
@@ -312,25 +317,45 @@ final class MeetingsCoordinatorImpl {
         return result
     }
 
-    private func performStartMeeting() async -> Result<UUID, MeetingStartFailure> {
-        let micOK = await Permissions.microphoneGranted()
-        let screenOK: Bool
+    /// Runs the shareable-content probe under the shared timeout. A wedged
+    /// probe is the capture stack failing, not the user withholding a
+    /// permission — reporting it as `.unavailable` keeps the user out of a
+    /// Settings pane with nothing to change.
+    private func probeScreenCapture() async -> ScreenCaptureAvailability {
         switch await AppController.withTimeout(
             seconds: Self.screenCaptureTimeoutSeconds,
-            operation: { await SystemAudioSource.permissionGranted() }
+            operation: { await SystemAudioSource.permissionProbe() }
         ) {
-        case .completed(let granted):
-            screenOK = granted
+        case .completed(let availability):
+            return availability
         case .timedOut:
             WisprLog.log("meeting start: screen recording permission probe exceeded "
-                + "\(Self.screenCaptureTimeoutSeconds)s — treating as not granted")
-            screenOK = false
+                + "\(Self.screenCaptureTimeoutSeconds)s — treating as unavailable")
+            return .unavailable
+        }
+    }
+
+    private func performStartMeeting() async -> Result<UUID, MeetingStartFailure> {
+        let micOK = await Permissions.microphoneGranted()
+        var screenCapture = await probeScreenCapture()
+        // Ask before giving up. A Screen Recording grant goes stale whenever
+        // the app binary is replaced, and the probe reports that exactly as
+        // it reports a first-run denial — so without this the user is told
+        // to grant a permission that Settings already shows as granted, and
+        // macOS never re-prompts because nothing ever asked it to. Once per
+        // launch: if macOS has a standing decline for this app it returns
+        // false without showing anything.
+        if screenCapture == .denied, !screenCaptureAccessRequested {
+            screenCaptureAccessRequested = true
+            let granted = await SystemAudioSource.requestAccess()
+            WisprLog.log("meeting start: requested screen recording access -> \(granted)")
+            screenCapture = await probeScreenCapture()
         }
         if let refusal = AppController.meetingStartRefusal(
             dictationPhaseIdle: dictationPhaseIdle(),
             meetingActive: meetingRecordingActive,
             micGranted: micOK,
-            screenRecordingGranted: screenOK) {
+            screenCapture: screenCapture) {
             WisprLog.log("meeting start refused: \(refusal)")
             return .failure(refusal)
         }

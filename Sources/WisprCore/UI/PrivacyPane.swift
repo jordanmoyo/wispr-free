@@ -1,5 +1,39 @@
 import SwiftUI
 
+/// The body of "Delete Everything", lifted out of the button closure so the
+/// one guarantee that matters — that no store the app writes survives it —
+/// is testable. A SwiftUI alert action is not.
+///
+/// Every store the app persists user content to must be listed here, and
+/// every one listed here must appear in `PRIVACY.md`'s file inventory. A
+/// store added to the app and not to this function is a promise the Privacy
+/// pane breaks silently.
+enum DeleteAllData {
+    /// Returns false when meetings refused (one is recording or stopping)
+    /// and nothing at all was deleted.
+    ///
+    /// Meetings are checked-and-deleted FIRST and everything else is gated on
+    /// that succeeding, so a refusal leaves the user with everything intact
+    /// rather than a silent partial wipe — see the alert's own comment.
+    static func run(meetings: any MeetingsCoordinating,
+                    history: HistoryStore,
+                    corrections: CorrectionStore,
+                    archive: AudioArchiveStore,
+                    transcriptions: TranscriptionJobStore) async -> Bool {
+        guard await meetings.deleteAllMeetings() else { return false }
+        await history.clear()
+        await corrections.removeAll()
+        await archive.deleteAll()
+        // Transcriptions hold the most sensitive content the app stores —
+        // full transcripts of arbitrary uploaded audio, plus every summary
+        // and report generated from them. A button labelled "Delete
+        // Everything" that leaves them on disk is the one failure this pane
+        // cannot have.
+        await transcriptions.deleteAll()
+        return true
+    }
+}
+
 struct PrivacyPane: View {
     let context: MainWindowContext
 
@@ -213,15 +247,17 @@ struct PrivacyPane: View {
                     // first and aborting the WHOLE operation on refusal means
                     // either everything this alert promised is deleted, or
                     // nothing is — never a silent partial.
-                    guard await context.meetingsCoordinator.deleteAllMeetings() else { return }
-                    await context.historyStore.clear()
-                    await context.correctionStore.removeAll()
-                    await context.audioArchive.deleteAll()
+                    guard await DeleteAllData.run(
+                        meetings: context.meetingsCoordinator,
+                        history: context.historyStore,
+                        corrections: context.correctionStore,
+                        archive: context.audioArchive,
+                        transcriptions: context.transcriptionStore) else { return }
                     NotificationCenter.default.post(name: .wisprHistoryDidChange, object: nil)
                 }
             }
         } message: {
-            Text("Permanently deletes all dictation history, learned corrections, and meetings. This cannot be undone.")
+            Text("Permanently deletes all dictation history, learned corrections, meetings, and file transcriptions. This cannot be undone.")
         }
     }
 

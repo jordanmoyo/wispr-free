@@ -18,7 +18,7 @@ final class MeetingMutualExclusionTests: XCTestCase {
     func testNoRefusalWhenEverythingIsReady() {
         XCTAssertNil(AppController.meetingStartRefusal(
             dictationPhaseIdle: true, meetingActive: false,
-            micGranted: true, screenRecordingGranted: true))
+            micGranted: true, screenCapture: .granted))
     }
 
     func testDictationInProgressRefusesFirst() {
@@ -26,19 +26,53 @@ final class MeetingMutualExclusionTests: XCTestCase {
         // fix in a second.
         XCTAssertEqual(AppController.meetingStartRefusal(
             dictationPhaseIdle: false, meetingActive: false,
-            micGranted: false, screenRecordingGranted: false), .dictationInProgress)
+            micGranted: false, screenCapture: .denied), .dictationInProgress)
     }
 
     func testMicDenialRefuses() {
         XCTAssertEqual(AppController.meetingStartRefusal(
             dictationPhaseIdle: true, meetingActive: false,
-            micGranted: false, screenRecordingGranted: true), .micDenied)
+            micGranted: false, screenCapture: .granted), .micDenied)
     }
 
     func testScreenRecordingDenialRefuses() {
         XCTAssertEqual(AppController.meetingStartRefusal(
             dictationPhaseIdle: true, meetingActive: false,
-            micGranted: true, screenRecordingGranted: false), .screenRecordingDenied)
+            micGranted: true, screenCapture: .denied), .screenRecordingDenied)
+    }
+
+    /// A capture stack that will not answer is not a missing permission.
+    /// Reporting it as one sent the user to a Settings pane where Wispr Free
+    /// was already enabled — nothing to change, and the meeting still would
+    /// not start.
+    func testAnUnavailableCaptureStackIsNotReportedAsADeniedPermission() {
+        XCTAssertEqual(AppController.meetingStartRefusal(
+            dictationPhaseIdle: true, meetingActive: false,
+            micGranted: true, screenCapture: .unavailable), .screenCaptureUnavailable)
+    }
+
+    /// The two messages must not send the user to the same place: only a
+    /// real denial is fixed in System Settings.
+    func testOnlyADeniedPermissionPointsAtSystemSettings() {
+        XCTAssertTrue(MeetingStartFailure.screenRecordingDenied.userMessage
+            .contains("System Settings"))
+        XCTAssertFalse(MeetingStartFailure.screenCaptureUnavailable.userMessage
+            .contains("System Settings"))
+    }
+
+    /// Only `SCStreamError.userDeclined` means the user withheld the
+    /// permission; every other failure is the capture stack.
+    func testProbeErrorsAreClassified() {
+        let domain = "com.apple.ScreenCaptureKit.SCStreamErrorDomain"
+        XCTAssertEqual(
+            SystemAudioSource.availability(forProbeError:
+                NSError(domain: domain, code: -3801)), .denied)
+        XCTAssertEqual(
+            SystemAudioSource.availability(forProbeError:
+                NSError(domain: domain, code: -3802)), .unavailable)
+        XCTAssertEqual(
+            SystemAudioSource.availability(forProbeError:
+                NSError(domain: NSCocoaErrorDomain, code: 4099)), .unavailable)
     }
 
     func testActiveMeetingIsNotARefusal() {
@@ -46,7 +80,7 @@ final class MeetingMutualExclusionTests: XCTestCase {
         // failing — so this must be nil.
         XCTAssertNil(AppController.meetingStartRefusal(
             dictationPhaseIdle: true, meetingActive: true,
-            micGranted: true, screenRecordingGranted: true))
+            micGranted: true, screenCapture: .granted))
     }
 
     func testDictationBlockedMessageMentionsMeeting() {
